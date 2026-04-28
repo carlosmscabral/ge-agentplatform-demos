@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "skills": {
+    "cloud-run-basics": {
+      "source": "google/skills",
+      "sourceType": "github",
+      "computedHash": "bc11572a238ce911487c58f2f6ebbb947525fd1a69514a44842c904af6fce319"
+    },
+    "gemini-api": {
+      "source": "google/skills",
+      "sourceType": "github",
+      "computedHash": "445259b8086e10073300f8451dea10a2c62d8616723edf5d376eaf337f248a68"
+    },
+    "google-agents-cli-adk-code": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "b5cc9d2848123e21f85d8cae3c6b2f8b05af7dfca42e6d19041ae7813d4d73d6"
+    },
+    "google-agents-cli-deploy": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "c0f55762f3e1dc6d4acfeeaba261f52634a4d4850fb821118ff5baeadfe4badb"
+    },
+    "google-agents-cli-eval": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "bd1a4e18c9aa94517d8d61ccef7cbab117156722bc2216f48d65eded0816e3a4"
+    },
+    "google-agents-cli-observability": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "8ff71b952d5d3616e2f9d78942fc9995b9fadb9b3a1bccfccbda22125100bef6"
+    },
+    "google-agents-cli-publish": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "a2651eaa70010a3224c76c923338616d5be3ff809a1ce12fc23ba1dbd529d4c1"
+    },
+    "google-agents-cli-scaffold": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "e7d21d5204ce2ed04a24d1c5f82a402e3ad9f793952ec571251728c2b4e97cc0"
+    },
+    "google-agents-cli-workflow": {
+      "source": "google/agents-cli",
+      "sourceType": "github",
+      "computedHash": "4eab6dc05bda4e16bbd4e3de9d475f0122862804dc1efbc01c9c9ff74800e9ac"
+    },
+    "google-cloud-recipe-auth": {
+      "source": "google/skills",
+      "sourceType": "github",
+      "computedHash": "ab6de3028e6bbf55e7361ac16af3df9fa45b668d2183c5479d57773abac35c37"
+    },
+    "google-cloud-recipe-networking-observability": {
+      "source": "google/skills",
+      "sourceType": "github",
+      "computedHash": "737f431ad979bba5b05683a3b835c5212418b4a25deada42af397e3d8bb03cb6"
+    }
+  }
+}

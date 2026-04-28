@@ -1,0 +1,39 @@
+{
+  "tools": [
+    {
+      "name": "get_account_balance",
+      "description": "Get the current balance for a user. (Read-only)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "user_id": {"type": "string"}
+        },
+        "required": ["user_id"]
+      },
+      "annotations": {
+        "title": "Get Account Balance",
+        "readOnlyHint": true,
+        "idempotentHint": true
+      }
+    },
+    {
+      "name": "transfer_funds",
+      "description": "Transfer funds between accounts. (Write operation)",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "from_user": {"type": "string"},
+          "to_user": {"type": "string"},
+          "amount": {"type": "number"}
+        },
+        "required": ["from_user", "to_user", "amount"]
+      },
+      "annotations": {
+        "title": "Transfer Funds",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": false
+      }
+    }
+  ]
+}

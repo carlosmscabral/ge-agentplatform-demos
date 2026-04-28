@@ -1,0 +1,18 @@
+{
+  "rules": [
+    {
+      "denyRule": {
+        "deniedPrincipals": [
+          "principalSet://goog/public:all"
+        ],
+        "deniedPermissions": [
+          "mcp.googleapis.com/tools.call"
+        ],
+        "denialCondition": {
+          "title": "Deny read-write tools",
+          "expression": "api.getAttribute('mcp.googleapis.com/tool.isReadOnly', false) == false"
+        }
+      }
+    }
+  ]
+}
