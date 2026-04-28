@@ -197,3 +197,9 @@ my_env.tfvars
 
 # A2A Inspector
 tools/a2a-inspector/
+
+# Demo artifacts
+deployed_engine.txt
+deployment_metadata.json
+*.bak
+.adk/

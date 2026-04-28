@@ -1,9 +1,3 @@
-import os
-os.environ["LOGS_BUCKET_NAME"]="gs://vibe-cabral-agent-staging"
-os.environ["OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"]="true"
-import os
-os.environ['LOGS_BUCKET_NAME'] = 'gs://vibe-cabral-agent-staging'
-os.environ['OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT'] = 'true'
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,6 +17,7 @@ from typing import Any
 
 import vertexai
 from dotenv import load_dotenv
+from google.adk.agents.base_agent import BaseAgent
 from google.adk.artifacts import GcsArtifactService, InMemoryArtifactService
 from google.cloud import logging as google_cloud_logging
 from vertexai.agent_engines.templates.adk import AdkApp
@@ -31,13 +26,14 @@ from app.agent import app as adk_app
 from app.app_utils.telemetry import setup_telemetry
 from app.app_utils.typing import Feedback
 
-# Load environment variables from .env file at runtime
 load_dotenv()
+
+gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
+logs_bucket_name = os.environ.get("LOGS_BUCKET_NAME")
 
 
 class AgentEngineApp(AdkApp):
     def set_up(self) -> None:
-        """Initialize the agent engine app with logging and telemetry."""
         vertexai.init()
         setup_telemetry()
         super().set_up()
@@ -48,22 +44,18 @@ class AgentEngineApp(AdkApp):
             os.environ["GOOGLE_CLOUD_LOCATION"] = gemini_location
 
     def register_feedback(self, feedback: dict[str, Any]) -> None:
-        """Collect and log feedback."""
         feedback_obj = Feedback.model_validate(feedback)
         self.logger.log_struct(feedback_obj.model_dump(), severity="INFO")
 
     def register_operations(self) -> dict[str, list[str]]:
-        """Registers the operations of the Agent."""
         operations = super().register_operations()
         operations[""] = [*operations.get("", []), "register_feedback"]
         return operations
 
 
-gemini_location = os.environ.get("GOOGLE_CLOUD_LOCATION")
-logs_bucket_name = os.environ.get("LOGS_BUCKET_NAME")
-from google.adk.agents.base_agent import BaseAgent
 agent_runtime = AgentEngineApp(
-    agent=adk_app if isinstance(adk_app, BaseAgent) else None, app=adk_app if not isinstance(adk_app, BaseAgent) else None,
+    agent=adk_app if isinstance(adk_app, BaseAgent) else None,
+    app=adk_app if not isinstance(adk_app, BaseAgent) else None,
     artifact_service_builder=lambda: (
         GcsArtifactService(bucket_name=logs_bucket_name)
         if logs_bucket_name

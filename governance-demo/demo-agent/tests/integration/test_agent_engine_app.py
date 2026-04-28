@@ -17,7 +17,7 @@ import logging
 import pytest
 from google.adk.events.event import Event
 
-from app.agent_engine_app import AgentEngineApp
+from app.agent_runtime_app import AgentEngineApp
 
 
 @pytest.fixture
@@ -26,10 +26,10 @@ def agent_app(monkeypatch: pytest.MonkeyPatch) -> AgentEngineApp:
     # Set integration test flag to mock external services
     monkeypatch.setenv("INTEGRATION_TEST", "TRUE")
 
-    from app.agent_engine_app import agent_engine
+    from app.agent_runtime_app import agent_runtime
 
-    agent_engine.set_up()
-    return agent_engine
+    agent_runtime.set_up()
+    return agent_runtime
 
 
 @pytest.mark.asyncio
