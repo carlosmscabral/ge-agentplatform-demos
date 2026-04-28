@@ -1,20 +1,9 @@
-name: mcp-authz-policy
+name: agent-authz-profile
 target:
-  loadBalancingScheme: INTERNAL_SELF_MANAGED
   resources:
     - "//networkservices.googleapis.com/projects/${PROJECT_ID}/locations/${REGION}/agentGateways/${GATEWAY_NAME}"
 policyProfile: REQUEST_AUTHZ
-httpRules:
-  - to:
-      operations:
-        - mcp:
-            baseProtocolMethodsOption: MATCH_BASE_PROTOCOL_METHODS
-            methods:
-              - name: "tools/call"
-                params:
-                  - exact: "get_account_balance"
-              - name: "tools/list"
-action: ALLOW
+action: CUSTOM
 customProvider:
   authzExtension:
     resources:

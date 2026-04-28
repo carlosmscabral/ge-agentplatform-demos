@@ -1,9 +1,27 @@
+"""Deploy the governance demo agent to Agent Runtime.
+
+Single-call deployment that supports Agent Gateway attachment,
+agent identity (SPIFFE), and observability configuration.
+
+Usage:
+    # Without gateway
+    PROJECT_ID=my-project REGION=us-central1 \
+        MCP_SERVER_URL=https://my-mcp.run.app/sse \
+        uv run python deploy_agent.py
+
+    # With gateway
+    PROJECT_ID=my-project REGION=us-central1 \
+        MCP_SERVER_URL=https://my-mcp.run.app/sse \
+        AGENT_GATEWAY_RESOURCE_ID=projects/my-project/locations/us-central1/agentGateways/my-gw \
+        uv run python deploy_agent.py
+"""
+
 import json
 import os
 import sys
 
 import vertexai
-from vertexai_genai.agentengines import AgentEngineConfig
+from vertexai._genai.types.common import AgentEngineConfig, IdentityType
 
 from app.agent_runtime_app import agent_runtime
 
@@ -15,14 +33,15 @@ def deploy():
         sys.exit(1)
 
     location = os.environ.get("REGION", "us-central1")
-    gateway_id = os.environ.get("GATEWAY_RESOURCE_ID")
+    gateway_id = os.environ.get("AGENT_GATEWAY_RESOURCE_ID")
     display_name = os.environ.get("AGENT_DISPLAY_NAME", "demo-agent-governed")
     mcp_server_url = os.environ.get("MCP_SERVER_URL", "")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
     logs_bucket = os.environ.get("LOGS_BUCKET_NAME", f"{project_id}-agent-staging")
 
-    print(f"Project: {project_id}, Location: {location}")
-    print(f"Gateway: {gateway_id}")
+    print(f"Project:  {project_id}")
+    print(f"Location: {location}")
+    print(f"Gateway:  {gateway_id or '(none)'}")
 
     client = vertexai.Client(
         project=project_id,
@@ -40,19 +59,19 @@ def deploy():
     }
 
     config_kwargs = {
-        "display_name": display_name,
-        "env_vars": env_vars,
-        "agent_framework": "google-adk",
+        "displayName": display_name,
+        "stagingBucket": f"gs://{project_id}-agent-staging",
+        "envVars": env_vars,
+        "agentFramework": "google-adk",
+        "identityType": IdentityType.AGENT_IDENTITY,
     }
 
     if gateway_id:
-        config_kwargs["agent_gateway_config"] = {
-            "agent_to_anywhere_config": {
-                "agent_gateway": gateway_id
+        config_kwargs["agentGatewayConfig"] = {
+            "agentToAnywhereConfig": {
+                "agentGateway": gateway_id
             }
         }
-        from vertexai_genai.types import IdentityType
-        config_kwargs["identity_type"] = IdentityType.AGENT_IDENTITY
 
     config = AgentEngineConfig(**config_kwargs)
 
@@ -60,24 +79,32 @@ def deploy():
         a for a in client.agent_engines.list()
         if a.api_resource.display_name == display_name
     ]
-
     if existing:
-        print(f"Updating existing agent: {existing[0].api_resource.name}")
-        result = client.agent_engines.update(name=existing[0].api_resource.name, config=config)
-    else:
-        print("Creating new agent...")
-        result = client.agent_engines.create(config=config)
+        print(f"ERROR: Agent '{display_name}' already exists: {existing[0].api_resource.name}")
+        print("Delete it first (gateway can only be set at creation time).")
+        sys.exit(1)
 
-    agent_name = result.api_resource.name if hasattr(result, 'api_resource') else str(result)
-    print(f"Deployed: {agent_name}")
+    print("Creating agent...")
+    agent = client.agent_engines.create(agent=agent_runtime, config=config)
+
+    name = agent.api_resource.name
+    print(f"Deployed: {name}")
 
     metadata = {
-        "remote_agent_runtime_id": agent_name,
+        "remote_agent_runtime_id": name,
         "deployment_target": "agent_runtime",
         "is_a2a": False,
+        "gateway": gateway_id,
     }
     with open("deployment_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
+
+    spiffe = getattr(agent.api_resource, "agent_identity", None)
+    if spiffe:
+        print(f"SPIFFE: {spiffe}")
+
+    print(f"\nPlayground: https://console.cloud.google.com/vertex-ai/agents/agent-engines/"
+          f"locations/{location}/agent-engines/{name.split('/')[-1]}/playground?project={project_id}")
 
 
 if __name__ == "__main__":

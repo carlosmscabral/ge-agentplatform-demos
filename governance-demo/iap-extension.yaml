@@ -1,3 +1,6 @@
 name: iap-extension
 service: iap.googleapis.com
-timeout: 10s
+metadata:
+  iamEnforcementMode: DRY_RUN
+failOpen: true
+timeout: "10s"

@@ -67,38 +67,78 @@ The Reasoning Engine service account (`service-PROJECT_NUMBER@gcp-sa-aiplatform-
 ## Prerequisites
 
 * `gcloud` CLI authenticated with appropriate permissions
-* `roles/iam.denyAdmin` granted at the Organization level
-* `uv` package manager installed
+* `uv` package manager installed, `agents-cli` installed (`uv tool install google-agents-cli`)
 * `envsubst` available (standard on Linux/macOS)
+* **Agent Gateway allowlist**: Your project must be allowlisted for the "Agent Gateway for Agent Engine" integration. Without this, attaching a gateway to a Reasoning Engine returns `FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. Request access from the Agent Platform team. (This requirement will likely be removed when the feature reaches GA.)
+* **One gateway per region per type**: Only one `AGENT_TO_ANYWHERE` gateway can exist per project+region. Having two causes the same `FAILED_PRECONDITION` error.
 
 ## Executing the Demo
+
+### Option A: Without Agent Gateway (works today)
+
+Deploy the agent without gateway routing. Both tools (read + write) will succeed — no governance enforcement.
 
 1. Copy the environment template and fill in your values:
    ```bash
    cp .env.template .env
-   # Edit .env with your PROJECT_ID and preferences
    ```
 
-2. Run the deployment script:
+2. Deploy infrastructure (MCP server, bucket, registry, gateway, IAM roles):
    ```bash
    ./deploy.sh
    ```
 
-3. Test your agent (read-only should work, write should be denied):
+3. Deploy the agent via `agents-cli`:
    ```bash
    cd demo-agent
-   PROJECT_ID=your-project REGION=us-central1 uv run python test_deployed_agent.py
+   agents-cli deploy --project PROJECT_ID --region us-central1 --agent-identity \
+     --update-env-vars "MCP_SERVER_URL=https://MCP_URL/sse,GEMINI_MODEL=gemini-3-flash-preview,LOGS_BUCKET_NAME=PROJECT_ID-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
+     --no-confirm-project
    ```
 
-4. Clean up all resources:
+4. Test:
    ```bash
-   ./undeploy.sh
+   agents-cli run "Check my account balance for user123"
    ```
+
+### Option B: With Agent Gateway (requires allowlist)
+
+Deploy with gateway routing and IAP policy enforcement. Write tools will be blocked.
+
+1. Complete steps 1-2 from Option A.
+
+2. Deploy the agent using `deploy_agent.py` (single-call create with gateway):
+   ```bash
+   cd demo-agent
+   PROJECT_ID=your-project REGION=us-central1 \
+     MCP_SERVER_URL=https://MCP_URL/sse \
+     AGENT_GATEWAY_RESOURCE_ID=projects/your-project/locations/us-central1/agentGateways/your-gateway \
+     uv run python deploy_agent.py
+   ```
+   Note: `agents-cli deploy` does not support `agent_gateway_config` — use `deploy_agent.py` for gateway deployments. The gateway **must** be attached at creation time (cannot be added to an existing engine, cannot be unbound).
+
+3. Apply IAP policies for tool governance.
+
+4. Test — `get_account_balance` should succeed, `transfer_funds` should be blocked.
+
+### Cleanup
+
+```bash
+./undeploy.sh
+```
 
 ## Demo Flow
 
 * **Test 1 (Allowed):** Prompt the agent to "Check my account balance". The agent invokes `get_account_balance` successfully.
-* **Test 2 (Blocked):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request due to the IAM read-only deny policy. The agent reports the inability to complete the transaction.
+* **Test 2 (Blocked, Option B only):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request due to IAP policy. The agent reports the inability to complete the transaction.
+
+## Known Limitations (April 2026)
+
+* **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting. The networking-level Agent Gateway resource can be created freely, but attaching it to a Reasoning Engine requires backend enablement.
+* **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments. `agents-cli` creates a shell agent first (identity only), then updates with code — the gateway config is silently dropped during the update step.
+* **Agent Registry auth from Reasoning Engine**: `AgentRegistry.get_mcp_toolset()` returns 401 inside Reasoning Engine. Use `MCP_SERVER_URL` with direct `SseConnectionParams` as fallback until resolved.
+* **Authz policies on Google-managed gateways**: `gcloud beta network-security authz-policies import` rejects all `loadBalancingScheme` values for Google-managed gateways. Use IAP Allow Policies instead.
+* **Deny policies may trigger org violations**: IAM Deny Policies using `principalSet://goog/public:all` can trigger org-level policy violations in managed environments (e.g., Argolis).
 
 ## Configuration
 
@@ -112,4 +152,3 @@ All configuration is managed through the `.env` file (see `.env.template`):
 | `MCP_SERVICE_NAME` | `finance-mcp-server` | Cloud Run service name |
 | `AGENT_REGISTRY_SERVICE_NAME` | `finance-mcp-service` | Agent Registry entry |
 | `GEMINI_MODEL` | `gemini-3-flash-preview` | Gemini model for the agent |
-| `DENY_POLICY_NAME` | `mcp-read-only-policy` | IAM deny policy name |

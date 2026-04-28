@@ -97,7 +97,7 @@ echo "    (Authz policies via network-security require self-managed gateways.)"
 # ─── Step 7: Grant IAM Roles to RE Service Account ─────────────────────────
 echo ""
 echo ">>> Step 7/10: Granting IAM roles to Reasoning Engine service account..."
-for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin; do
+for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry.viewer; do
     gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
         --member="serviceAccount:${RE_SERVICE_ACCOUNT}" \
         --role="${ROLE}" \

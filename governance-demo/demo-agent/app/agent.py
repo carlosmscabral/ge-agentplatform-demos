@@ -3,22 +3,18 @@ import os
 from google.adk.agents import Agent
 
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL")
-USE_AGENT_REGISTRY = os.environ.get("USE_AGENT_REGISTRY", "").lower() == "true"
-PROJECT_ID = os.environ.get("PROJECT_ID")
-REGION = os.environ.get("REGION", "us-central1")
-AGENT_REGISTRY_SERVICE_NAME = os.environ.get(
-    "AGENT_REGISTRY_SERVICE_NAME", "finance-mcp-service"
-)
+MCP_SERVER_NAME = os.environ.get("MCP_SERVER_NAME")
+REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
 
 
 def _build_mcp_toolset():
-    if USE_AGENT_REGISTRY and PROJECT_ID:
+    if MCP_SERVER_NAME:
         from google.adk.integrations.agent_registry import AgentRegistry
+        from google.auth import default
 
-        registry = AgentRegistry(project_id=PROJECT_ID, location=REGION)
-        return registry.get_mcp_toolset(
-            mcp_server_name=f"mcpServers/{AGENT_REGISTRY_SERVICE_NAME}"
-        )
+        _, project_id = default()
+        registry = AgentRegistry(project_id=project_id, location=REGION)
+        return registry.get_mcp_toolset(MCP_SERVER_NAME)
 
     from google.adk.tools.mcp_tool import McpToolset
     from google.adk.tools.mcp_tool.mcp_session_manager import SseConnectionParams
