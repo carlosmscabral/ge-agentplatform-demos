@@ -1,5 +1,5 @@
 import asyncio
-import os
+
 from app.agent import root_agent
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService

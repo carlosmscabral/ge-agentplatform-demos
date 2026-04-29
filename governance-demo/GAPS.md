@@ -14,18 +14,34 @@ Last updated: 2026-04-29.
 
 ---
 
-## Gap 1: Agent Gateway not attached to Agent Engine
+## Gap 1: Agent Gateway — entire flow is unvalidated end-to-end
 
-**Impact:** Tool governance (read-only enforcement via IAP policies) is **not active**. The agent can call any MCP tool without restriction.
+**Impact:** The core governance story (agent traffic routed through gateway, policies evaluated, write tools blocked) has **never been validated** in this demo. The gateway resource exists, but it's not wired into the agent's runtime path.
 
-**Root cause:** Two blockers:
-1. `agents-cli deploy` silently drops `agentGatewayConfig` during its update step (see LEARNINGS.md). A separate `deploy_agent.py` exists that does a single `create()` call, but `deploy.sh` doesn't use it yet.
-2. The project may need to be on the **Agent Gateway allowlist** for Agent Engine integration. Without it, attaching a gateway returns `400 FAILED_PRECONDITION`.
+**What works today:**
+- The Agent Gateway resource itself can be created (`gcloud alpha network-services agent-gateways import`)
+- The IAP service extension resource can be created
+- The IAM Deny Policy can be applied
+- `deploy_agent.py` has the code to attach the gateway at agent creation time
 
-**To fix:**
-- Confirm allowlist status with the Agent Platform team
-- Switch `deploy.sh` step 8 from `agents-cli deploy` to `python deploy_agent.py` (or update `agents-cli` when it gains gateway support)
-- Gateway can only be set at creation time — the current agent must be deleted and recreated
+**What has NOT been validated:**
+1. **Gateway attachment to Agent Engine** — requires project-level allowlist from Agent Platform team. Without it: `400 FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. We have not confirmed whether project `vibe-cabral` is allowlisted.
+2. **Traffic actually routing through the gateway** — even with attachment, we haven't confirmed the agent's MCP calls go through the gateway vs. direct to Cloud Run.
+3. **IAP policy evaluation** — we don't know if the `mcp.googleapis.com/tool.isReadOnly` attribute is correctly populated from the registry's tool annotations (`readOnlyHint`). The attribute mapping is undocumented.
+4. **Write tool blocking** — the end goal (`transfer_funds` blocked, `get_account_balance` allowed) has never been tested.
+5. **Correct governance mechanism** — LEARNINGS.md says IAP Allow Policies (not IAM Deny Policies) are the correct approach for Google-managed gateways. `deploy.sh` step 10 applies a Deny Policy, which may be the wrong mechanism entirely.
+
+**Root cause of non-validation:** Two deployment blockers:
+- `agents-cli deploy` silently drops `agentGatewayConfig` during its update step. `deploy.sh` step 8 uses `agents-cli deploy`, not `deploy_agent.py`.
+- The project may not be allowlisted for the Agent Gateway + Agent Engine integration.
+
+**To validate the full flow:**
+1. Confirm allowlist status with the Agent Platform team
+2. Delete the current agent (`agents-cli deploy --delete` or REST API with `force=true`)
+3. Switch `deploy.sh` step 8 to use `deploy_agent.py` (which does a single `create()` with gateway config)
+4. Verify traffic routes through the gateway (check gateway logs / Cloud Trace)
+5. Confirm the correct governance mechanism (Deny Policy vs. IAP Allow Policy) and update step 10
+6. Test: `get_account_balance` succeeds, `transfer_funds` is blocked
 
 ---
 
@@ -100,20 +116,9 @@ curl -s "https://REGION-aiplatform.googleapis.com/v1beta1/projects/PROJECT/locat
 
 ---
 
-## Gap 7: LEARNINGS.md has stale SSE references
-
-**Impact:** Documentation drift. Several sections still reference SSE transport (`/sse`, `SseServerTransport`, `SseConnectionParams`) which has been replaced by Streamable HTTP.
-
-**Sections to update:**
-- "Agent Registry > Correct flags for `services create`" — URL should reference `/mcp` not `/sse`
-- "MCP Server on Cloud Run > Use low-level `mcp.server.Server`" — should show `StreamableHTTPSessionManager` pattern, not `SseServerTransport`
-
----
-
 ## Cleanup backlog
 
 Minor items that don't affect functionality:
 
-- [ ] `deploy.sh` step 6 is a no-op placeholder — remove or implement when authz policies work with managed gateways
+- [ ] `deploy.sh` steps 5-6 are no-op placeholders — implement when authz policies work with managed gateways
 - [ ] `deployment_metadata.json` schema differs between `agents-cli` and `deploy_agent.py` — standardize
-- [ ] `session.db` is tracked in git — should be in `.gitignore`

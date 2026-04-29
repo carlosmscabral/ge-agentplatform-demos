@@ -83,19 +83,17 @@ gcloud alpha network-services agent-gateways import "${GATEWAY_NAME}" \
 GATEWAY_RESOURCE_ID="projects/${PROJECT_ID}/locations/${REGION}/agentGateways/${GATEWAY_NAME}"
 echo "    Gateway: ${GATEWAY_RESOURCE_ID}"
 
-# ─── Step 5: Create IAP Service Extension ───────────────────────────────────
+# ─── Step 5: IAP Service Extension (placeholder) ──────────────────────────
 echo ""
-echo ">>> Step 5/10: Creating IAP service extension..."
-gcloud service-extensions authz-extensions import iap-extension \
-    --source="${SCRIPT_DIR}/iap-extension.yaml" \
-    --location="${REGION}" \
-    --quiet 2>/dev/null || echo "    IAP extension already exists."
+echo ">>> Step 5/10: IAP service extension..."
+echo "    Skipped: IAP extensions and authz policies are not yet supported on"
+echo "    Google-managed Agent Gateways. Tool governance uses IAM policies instead."
+echo "    (See GAPS.md for details.)"
 
 # ─── Step 6: Authorization Policy (skipped for Google-managed gateways) ─────
 echo ""
 echo ">>> Step 6/10: Authorization policy..."
-echo "    Skipped: Google-managed gateways use IAM Deny Policies for tool governance."
-echo "    (Authz policies via network-security require self-managed gateways.)"
+echo "    Skipped: Same as Step 5 — requires self-managed gateways."
 
 # ─── Step 7: Grant IAM Roles to RE Service Account ─────────────────────────
 echo ""

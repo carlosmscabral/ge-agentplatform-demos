@@ -4,7 +4,7 @@ Demonstrates how to build and govern agents on Google Cloud's Agent Platform usi
 
 ## Architecture
 
-1. **MCP Server**: A Python `mcp.server.Server` using Starlette deployed to **Cloud Run**. It exposes an SSE transport endpoint and implements two tools:
+1. **MCP Server**: A Python `mcp.server.Server` using Starlette deployed to **Cloud Run**. It exposes a Streamable HTTP transport endpoint (`/mcp`) and implements two tools:
     * `get_account_balance` (read-only)
     * `transfer_funds` (destructive/write-operation)
 2. **Agent Registry**: The central catalog where the MCP server is registered, mapping the endpoint URL and attaching metadata (the Tool Spec) to each exposed tool. The ADK agent uses `AgentRegistry.get_mcp_toolset()` for **runtime endpoint discovery** instead of hardcoding URLs.
@@ -16,9 +16,9 @@ Demonstrates how to build and govern agents on Google Cloud's Agent Platform usi
 
 ## Key Learnings & Pitfalls
 
-### 1. Cloud Run and MCP Server-Sent Events (SSE)
-When deploying a Python-based MCP server to Cloud Run, `FastMCP` abstraction can be difficult to bind appropriately to Cloud Run's required `$PORT` when using HTTP/SSE.
-**Solution:** We use a lower-level `mcp.server.Server` implementation wrapped in a `starlette` application, explicitly handling the `/sse` and `/messages` endpoints.
+### 1. Cloud Run and MCP Streamable HTTP
+When deploying a Python-based MCP server to Cloud Run, `FastMCP` abstraction can be difficult to bind appropriately to Cloud Run's required `$PORT`.
+**Solution:** We use a lower-level `mcp.server.Server` with `StreamableHTTPSessionManager(stateless=True)` wrapped in a `starlette` application, serving a single `/mcp` endpoint. Stateless mode avoids session affinity issues on Cloud Run.
 
 ### 2. Agent Registry Tool Annotations (`toolspec.json`)
 By default, the Agent Gateway doesn't inherently know if a tool is safe or destructive. We register the service in the Agent Registry using `gcloud alpha agent-registry services create` and supply an explicit `toolspec.json`:
@@ -92,7 +92,7 @@ Deploy the agent without gateway routing. Both tools (read + write) will succeed
    ```bash
    cd demo-agent
    agents-cli deploy --project PROJECT_ID --region us-central1 --agent-identity \
-     --update-env-vars "MCP_SERVER_URL=https://MCP_URL/sse,GEMINI_MODEL=gemini-3-flash-preview,LOGS_BUCKET_NAME=PROJECT_ID-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
+     --update-env-vars "MCP_SERVER_NAME=MCP_SERVER_RESOURCE,MCP_SERVER_URL=https://MCP_URL/mcp,GEMINI_MODEL=gemini-3-flash-preview,LOGS_BUCKET_NAME=PROJECT_ID-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
      --no-confirm-project
    ```
 
@@ -111,7 +111,7 @@ Deploy with gateway routing and IAP policy enforcement. Write tools will be bloc
    ```bash
    cd demo-agent
    PROJECT_ID=your-project REGION=us-central1 \
-     MCP_SERVER_URL=https://MCP_URL/sse \
+     MCP_SERVER_URL=https://MCP_URL/mcp \
      AGENT_GATEWAY_RESOURCE_ID=projects/your-project/locations/us-central1/agentGateways/your-gateway \
      uv run python deploy_agent.py
    ```
@@ -136,7 +136,7 @@ Deploy with gateway routing and IAP policy enforcement. Write tools will be bloc
 
 * **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting. The networking-level Agent Gateway resource can be created freely, but attaching it to a Reasoning Engine requires backend enablement.
 * **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments. `agents-cli` creates a shell agent first (identity only), then updates with code — the gateway config is silently dropped during the update step.
-* **Agent Registry auth from Reasoning Engine**: `AgentRegistry.get_mcp_toolset()` returns 401 inside Reasoning Engine. Use `MCP_SERVER_URL` with direct `SseConnectionParams` as fallback until resolved.
+* **Agent Registry auth requires SPIFFE permissions**: `AgentRegistry.get_mcp_toolset()` authenticates via the agent's SPIFFE identity, not the RE service account. The SPIFFE principal needs `roles/agentregistry.viewer` (currently using `roles/owner` as a blunt workaround). A `_LazyToolset` wrapper is also required to defer the registry call past Agent Runtime's deploy health checks.
 * **Authz policies on Google-managed gateways**: `gcloud beta network-security authz-policies import` rejects all `loadBalancingScheme` values for Google-managed gateways. Use IAP Allow Policies instead.
 * **Deny policies may trigger org violations**: IAM Deny Policies using `principalSet://goog/public:all` can trigger org-level policy violations in managed environments (e.g., Argolis).
 
