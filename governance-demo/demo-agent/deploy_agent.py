@@ -6,12 +6,12 @@ agent identity (SPIFFE), and observability configuration.
 Usage:
     # Without gateway
     PROJECT_ID=my-project REGION=us-central1 \
-        MCP_SERVER_URL=https://my-mcp.run.app/sse \
+        MCP_SERVER_URL=https://my-mcp.run.app/mcp \
         uv run python deploy_agent.py
 
     # With gateway
     PROJECT_ID=my-project REGION=us-central1 \
-        MCP_SERVER_URL=https://my-mcp.run.app/sse \
+        MCP_SERVER_URL=https://my-mcp.run.app/mcp \
         AGENT_GATEWAY_RESOURCE_ID=projects/my-project/locations/us-central1/agentGateways/my-gw \
         uv run python deploy_agent.py
 """

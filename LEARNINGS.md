@@ -83,15 +83,21 @@ The UG and early docs reference `--endpoint-uri` and `--tool-spec-file` — thes
 ```bash
 gcloud alpha agent-registry services create SERVICE_NAME \
     --location=REGION \
-    --display-name="My MCP Server" \
-    --interfaces="protocolBinding=jsonrpc,url=https://my-server.run.app/sse" \
+    --display-name="finance" \
+    --interfaces="protocolBinding=jsonrpc,url=https://my-server.run.app/mcp" \
     --mcp-server-spec-type=tool-spec \
     --mcp-server-spec-content='{"tools": [...]}'
 ```
 Valid `protocolBinding` values: `grpc`, `http-json`, `jsonrpc`, `protocol-binding-unspecified`. Not `MCP_SSE`.
 
-### Agent Registry auth from Reasoning Engine — UNAUTHENTICATED issue
-`AgentRegistry.get_mcp_toolset()` uses `google.auth.default()` via `httpx`, but inside Reasoning Engine this returns a token that the Agent Registry API rejects with `401 UNAUTHENTICATED` ("Expected OAuth 2 access token"). Granting `roles/agentregistry.viewer` to the RE service account does not fix this. The `AgentRegistry` SDK may require the agent identity (SPIFFE/IAM connector credentials) flow to work, which in turn may require the Agent Gateway to be attached. **Status: unresolved — use `MCP_SERVER_URL` with direct `SseConnectionParams` as fallback.**
+**Important:** Keep `--display-name` short (e.g., `"finance"` not `"Finance MCP Server"`). This becomes the `tool_name_prefix` in `get_mcp_toolset()`, producing tool names like `finance_get_account_balance`.
+
+### Agent Registry auth from Reasoning Engine — requires SPIFFE permissions
+`AgentRegistry.get_mcp_toolset()` authenticates using the agent's SPIFFE identity (not the RE service account). Granting `roles/agentregistry.viewer` to the RE service account alone does not work — the SPIFFE principal needs the permission directly.
+
+**Status: working** with `roles/owner` on the SPIFFE principal (overly broad; needs refinement to `roles/agentregistry.viewer`).
+
+A `_LazyToolset` wrapper is also required to defer the `get_mcp_toolset()` call past import time, since Agent Runtime runs the module during deploy health checks when the registry isn't reachable yet.
 
 ### URL uniqueness constraint
 Agent Registry enforces URL uniqueness across services. If a URL is already registered by another service, `services create` will fail with `Interface URL is already in use by another service`. Delete the old service first.
@@ -188,19 +194,23 @@ The v1beta1 API is required for agent identity, gateway config, and other previe
 ## MCP Server on Cloud Run
 
 ### Use low-level `mcp.server.Server`, not `FastMCP`
-`FastMCP` doesn't bind well to Cloud Run's `$PORT`. Use `mcp.server.Server` with `starlette` + `uvicorn`:
+`FastMCP` doesn't bind well to Cloud Run's `$PORT`. Use `mcp.server.Server` with Streamable HTTP + `starlette` + `uvicorn`:
 ```python
 from mcp.server import Server
-from mcp.server.sse import SseServerTransport
+from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
-from starlette.routing import Route
 
-sse = SseServerTransport("/messages")
-app = Starlette(routes=[
-    Route("/sse", endpoint=handle_sse),
-    Route("/messages", endpoint=handle_messages, methods=["POST"]),
-])
+session_manager = StreamableHTTPSessionManager(app=server, stateless=True)
+
+async def routing_app(scope, receive, send):
+    if scope["path"] == "/mcp":
+        await session_manager.handle_request(scope, receive, send)
+
+app = Starlette(lifespan=lifespan)
+app.mount("/", app=routing_app)
 ```
+Use `stateless=True` to avoid session affinity issues on Cloud Run. Use raw ASGI routing (not `Starlette.Mount("/mcp", ...)`) to avoid 307 redirects.
+
 Dependencies: `mcp[cli]`, `starlette`, `uvicorn` (not `fastmcp`).
 
 ### Tool annotations drive governance

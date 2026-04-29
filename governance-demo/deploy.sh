@@ -61,11 +61,14 @@ gcloud alpha agent-registry services delete "${AGENT_REGISTRY_SERVICE_NAME}" \
 TOOLSPEC_CONTENT=$(cat "${SCRIPT_DIR}/toolspec.json")
 gcloud alpha agent-registry services create "${AGENT_REGISTRY_SERVICE_NAME}" \
     --location="${REGION}" \
-    --display-name="Finance MCP Server" \
-    --interfaces="protocolBinding=jsonrpc,url=${MCP_URL}/sse" \
+    --display-name="finance" \
+    --interfaces="protocolBinding=jsonrpc,url=${MCP_URL}/mcp" \
     --mcp-server-spec-type=tool-spec \
     --mcp-server-spec-content="${TOOLSPEC_CONTENT}"
+MCP_SERVER_RESOURCE=$(gcloud alpha agent-registry mcp-servers list \
+    --location="${REGION}" --format='value(name)' | head -1)
 echo "    Registered as: ${AGENT_REGISTRY_SERVICE_NAME}"
+echo "    MCP Server Resource: ${MCP_SERVER_RESOURCE}"
 
 # ─── Step 4: Create Agent Gateway ───────────────────────────────────────────
 echo ""
@@ -114,7 +117,7 @@ agents-cli deploy \
     --project "${PROJECT_ID}" \
     --region "${REGION}" \
     --agent-identity \
-    --update-env-vars "MCP_SERVER_URL=${MCP_URL}/sse,GEMINI_MODEL=${GEMINI_MODEL:-gemini-3-flash-preview},LOGS_BUCKET_NAME=${PROJECT_ID}-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
+    --update-env-vars "MCP_SERVER_NAME=${MCP_SERVER_RESOURCE},MCP_SERVER_URL=${MCP_URL}/mcp,GEMINI_MODEL=${GEMINI_MODEL:-gemini-3-flash-preview},LOGS_BUCKET_NAME=${PROJECT_ID}-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
     --no-confirm-project
 
 AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])")
