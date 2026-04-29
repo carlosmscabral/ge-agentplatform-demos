@@ -1,6 +1,6 @@
 # Google Agent Platform Governance Demo
 
-Demonstrates how to build and govern agents on Google Cloud's Agent Platform using the **Agent Developer Kit (ADK)**, **Reasoning Engine (Agent Runtime)**, **Agent Registry**, **Agent Gateway**, and **IAM Deny Policies**.
+Demonstrates how to build and govern agents on Google Cloud's Agent Platform using the **Agent Developer Kit (ADK)**, **Reasoning Engine (Agent Runtime)**, **Agent Registry**, **Agent Gateway**, and **IAP Allow Policies**.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Demonstrates how to build and govern agents on Google Cloud's Agent Platform usi
 2. **Agent Registry**: The central catalog where the MCP server is registered, mapping the endpoint URL and attaching metadata (the Tool Spec) to each exposed tool. The ADK agent uses `AgentRegistry.get_mcp_toolset()` for **runtime endpoint discovery** instead of hardcoding URLs.
 3. **Agent Gateway**: A managed `AGENT_TO_ANYWHERE` networking and security gateway. It intercepts requests going from the Reasoning Engine to external or internal tools.
 4. **ADK Agent**: A simple LLM agent deployed into **Reasoning Engine** (Agent Runtime). The deployment configures the agent to route its MCP traffic through the Agent Gateway using `agent_gateway_config`.
-5. **IAM Deny Policy**: The cornerstone of the governance. A project-level deny policy ensures that the agent is restricted to only executing tools marked as read-only.
+5. **IAP Allow Policy**: The cornerstone of the governance. The Agent Gateway is **default-deny** — all tool access is blocked unless explicitly allowed. An IAP policy grants `roles/iap.egressor` to the agent's SPIFFE identity with CEL conditions that evaluate tool annotations (e.g., `readOnlyHint`).
 
 ---
 
@@ -39,25 +39,21 @@ config={
 }
 ```
 
-### 5. MCP Governance via IAM (The Deny Policy Approach)
-Agent Gateway tool governance uses **IAM Deny Policies** to evaluate tool execution based on the `mcp.googleapis.com/tool.isReadOnly` attribute:
-```json
-{
-  "rules": [{
-    "denyRule": {
-      "deniedPrincipals": ["principalSet://goog/public:all"],
-      "deniedPermissions": ["mcp.googleapis.com/tools.call"],
-      "denialCondition": {
-        "title": "Deny read-write tools",
-        "expression": "api.getAttribute('mcp.googleapis.com/tool.isReadOnly', false) == false"
-      }
-    }
-  }]
-}
+### 5. MCP Governance via IAP (Allow-Based)
+The Agent Gateway is **default-deny**: all tool access is blocked unless explicitly allowed. Governance uses **IAP Allow Policies** with `roles/iap.egressor` and CEL conditions that evaluate tool annotations from the Agent Registry:
+
+```bash
+# Grant the agent's SPIFFE identity access to read-only tools only
+gcloud beta iap web set-iam-policy policy.json \
+    --project=PROJECT_ID \
+    --mcpServer=MCP_SERVER_ID \
+    --region=REGION
 ```
 
-### 6. Deny Admin Role Requirements
-To create IAM Deny Policies, the executing principal **must** possess `roles/iam.denyAdmin` at the Organization or Folder level. Project Owner or Organization Administrator is **not sufficient**.
+The IAP policy evaluates attributes like `iap.googleapis.com/mcp.tool.isReadOnly` (mapped from the `readOnlyHint` annotation in `toolspec.json` and the MCP server's `list_tools()` response).
+
+### 6. IAP vs IAM Deny Policies
+Earlier documentation referenced IAM Deny Policies — this is **outdated**. The correct model is IAP Allow Policies via the Agent Gateway. IAM Deny Policies operate at the project level without a gateway enforcement point and use different attribute names (`mcp.googleapis.com/...` vs `iap.googleapis.com/...`).
 
 ### 7. Observability and Telemetry
 The Reasoning Engine service account (`service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com`) requires `roles/cloudtrace.agent` for Cloud Trace. The deploy script grants this automatically.
@@ -137,8 +133,8 @@ Deploy with gateway routing and IAP policy enforcement. Write tools will be bloc
 * **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting. The networking-level Agent Gateway resource can be created freely, but attaching it to a Reasoning Engine requires backend enablement.
 * **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments. `agents-cli` creates a shell agent first (identity only), then updates with code — the gateway config is silently dropped during the update step.
 * **Agent Registry auth requires SPIFFE permissions**: `AgentRegistry.get_mcp_toolset()` authenticates via the agent's SPIFFE identity, not the RE service account. The SPIFFE principal needs `roles/agentregistry.viewer` (currently using `roles/owner` as a blunt workaround). A `_LazyToolset` wrapper is also required to defer the registry call past Agent Runtime's deploy health checks.
-* **Authz policies on Google-managed gateways**: `gcloud beta network-security authz-policies import` rejects all `loadBalancingScheme` values for Google-managed gateways. Use IAP Allow Policies instead.
-* **Deny policies may trigger org violations**: IAM Deny Policies using `principalSet://goog/public:all` can trigger org-level policy violations in managed environments (e.g., Argolis).
+* **Authz policies on Google-managed gateways**: `gcloud beta network-security authz-policies import` rejects all `loadBalancingScheme` values for Google-managed gateways. The correct mechanism is IAP Allow Policies with `roles/iap.egressor`.
+* **Full gateway flow unvalidated**: The end-to-end governance chain (gateway attachment → traffic routing → IAP policy evaluation → tool blocking) has not been validated yet. See `GAPS.md` for the full breakdown.
 
 ## Configuration
 

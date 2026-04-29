@@ -13,8 +13,6 @@ REGION="${REGION:-us-central1}"
 MCP_SERVICE_NAME="${MCP_SERVICE_NAME:-finance-mcp-server}"
 GATEWAY_NAME="${GATEWAY_NAME:-demo-agent-gateway}"
 AGENT_REGISTRY_SERVICE_NAME="${AGENT_REGISTRY_SERVICE_NAME:-finance-mcp-service}"
-DENY_POLICY_NAME="${DENY_POLICY_NAME:-mcp-read-only-policy}"
-
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║         Agent Platform Governance Demo — Teardown           ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
@@ -23,11 +21,10 @@ echo "  Project:  ${PROJECT_ID}"
 echo "  Region:   ${REGION}"
 echo ""
 
-# ─── Step 1: Delete IAM Deny Policy ────────────────────────────────────────
-echo ">>> Step 1/7: Deleting IAM Deny Policy..."
-gcloud iam policies delete "${DENY_POLICY_NAME}" \
-    --attachment-point="cloudresourcemanager.googleapis.com/projects/${PROJECT_ID}" \
-    --kind=denypolicies --quiet 2>/dev/null || echo "    Deny policy not found."
+# ─── Step 1: Delete IAP Allow Policy (if applied) ─────────────────────────
+echo ">>> Step 1/7: IAP Allow Policy cleanup..."
+echo "    If an IAP allow policy was applied, remove it manually:"
+echo "    gcloud beta iap web remove-iam-policy-binding ... --project=${PROJECT_ID}"
 
 # ─── Step 2: Delete ADK Agent ──────────────────────────────────────────────
 echo ""

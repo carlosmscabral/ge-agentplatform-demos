@@ -20,16 +20,14 @@ Last updated: 2026-04-29.
 
 **What works today:**
 - The Agent Gateway resource itself can be created (`gcloud alpha network-services agent-gateways import`)
-- The IAP service extension resource can be created
-- The IAM Deny Policy can be applied
 - `deploy_agent.py` has the code to attach the gateway at agent creation time
+- The governance model is confirmed: **IAP Allow Policies** with `roles/iap.egressor` (default-deny)
 
 **What has NOT been validated:**
 1. **Gateway attachment to Agent Engine** — requires project-level allowlist from Agent Platform team. Without it: `400 FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. We have not confirmed whether project `vibe-cabral` is allowlisted.
 2. **Traffic actually routing through the gateway** — even with attachment, we haven't confirmed the agent's MCP calls go through the gateway vs. direct to Cloud Run.
-3. **IAP policy evaluation** — we don't know if the `mcp.googleapis.com/tool.isReadOnly` attribute is correctly populated from the registry's tool annotations (`readOnlyHint`). The attribute mapping is undocumented.
+3. **IAP policy evaluation** — we don't know if the `iap.googleapis.com/mcp.tool.isReadOnly` attribute is correctly populated from the registry's tool annotations (`readOnlyHint`). The attribute mapping is undocumented.
 4. **Write tool blocking** — the end goal (`transfer_funds` blocked, `get_account_balance` allowed) has never been tested.
-5. **Correct governance mechanism** — LEARNINGS.md says IAP Allow Policies (not IAM Deny Policies) are the correct approach for Google-managed gateways. `deploy.sh` step 10 applies a Deny Policy, which may be the wrong mechanism entirely.
 
 **Root cause of non-validation:** Two deployment blockers:
 - `agents-cli deploy` silently drops `agentGatewayConfig` during its update step. `deploy.sh` step 8 uses `agents-cli deploy`, not `deploy_agent.py`.
@@ -40,7 +38,7 @@ Last updated: 2026-04-29.
 2. Delete the current agent (`agents-cli deploy --delete` or REST API with `force=true`)
 3. Switch `deploy.sh` step 8 to use `deploy_agent.py` (which does a single `create()` with gateway config)
 4. Verify traffic routes through the gateway (check gateway logs / Cloud Trace)
-5. Confirm the correct governance mechanism (Deny Policy vs. IAP Allow Policy) and update step 10
+5. Apply an IAP Allow Policy granting `roles/iap.egressor` to the agent SPIFFE identity (see `iap-allow-policy.json.example`)
 6. Test: `get_account_balance` succeeds, `transfer_funds` is blocked
 
 ---
@@ -79,15 +77,22 @@ principal://agents.global.org-ORGID.system.id.goog/resources/aiplatform/projects
 
 ---
 
-## Gap 4: No tool governance enforcement without gateway
+## Gap 4: IAP Allow Policy not applied (requires gateway)
 
-**Impact:** `deploy.sh` step 10 applies an IAM Deny Policy, but without the Agent Gateway attached (Gap 1), there's no enforcement point. The agent bypasses the gateway entirely and calls the MCP server directly via its URL.
+**Impact:** Tool governance is completely inactive. The agent can call any MCP tool without restriction.
 
-**Root cause:** Governance requires the full chain: Agent → Agent Gateway → IAP policy evaluation → MCP server. Without the gateway in the middle, policies aren't evaluated.
+**Root cause:** The Agent Gateway is default-deny — all tool access is blocked unless explicitly allowed via IAP Allow Policies. But the gateway isn't attached (Gap 1), so the enforcement point doesn't exist. Without the gateway in the request path, IAP policies are never evaluated.
 
-**To fix:** Resolve Gap 1 first. Then:
-- Confirm whether IAM Deny Policies or IAP Allow Policies are the correct mechanism (LEARNINGS.md notes that IAP Allow Policies are the actual model for Google-managed gateways)
-- Update `deploy.sh` step 10 accordingly
+**Governance model (confirmed):**
+- Agent Gateway is **default-deny** (not default-allow)
+- You grant `roles/iap.egressor` to the agent's SPIFFE identity with CEL conditions
+- The attribute is `iap.googleapis.com/mcp.tool.isReadOnly` (mapped from `readOnlyHint` in the tool spec)
+- The old IAM Deny Policy approach (`mcp.googleapis.com/tool.isReadOnly`) is **outdated** and has been removed
+
+**To fix:** Resolve Gap 1 first (attach gateway). Then:
+1. Apply an IAP Allow Policy granting the agent's SPIFFE identity `roles/iap.egressor` with a condition on `iap.googleapis.com/mcp.tool.isReadOnly == true`
+2. See `iap-allow-policy.json.example` for the template
+3. Apply via `gcloud beta iap web set-iam-policy`
 
 ---
 

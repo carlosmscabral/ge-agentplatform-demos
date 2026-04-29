@@ -16,7 +16,6 @@ GATEWAY_NAME="${GATEWAY_NAME:-demo-agent-gateway}"
 AGENT_REGISTRY_SERVICE_NAME="${AGENT_REGISTRY_SERVICE_NAME:-finance-mcp-service}"
 AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-demo-agent-governed}"
 STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-agent-staging}"
-DENY_POLICY_NAME="${DENY_POLICY_NAME:-mcp-read-only-policy}"
 RE_SERVICE_ACCOUNT="service-${PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
 
 export PROJECT_ID REGION GATEWAY_NAME
@@ -133,17 +132,20 @@ print(meta.get('spiffe_id', '(not available)'))
 echo "    Agent Resource: ${AGENT_RESOURCE_NAME}"
 echo "    Agent SPIFFE ID: ${SPIFFE_ID}"
 
-# ─── Step 10: Apply IAM Deny Policy ────────────────────────────────────────
+# ─── Step 10: Apply IAP Allow Policy for Tool Governance ──────────────────
 echo ""
-echo ">>> Step 10/10: Applying IAM Deny Policy for read-only tool enforcement..."
-gcloud iam policies delete "${DENY_POLICY_NAME}" \
-    --attachment-point="cloudresourcemanager.googleapis.com/projects/${PROJECT_ID}" \
-    --kind=denypolicies --quiet 2>/dev/null || true
-
-gcloud iam policies create "${DENY_POLICY_NAME}" \
-    --attachment-point="cloudresourcemanager.googleapis.com/projects/${PROJECT_ID}" \
-    --kind=denypolicies \
-    --policy-file="${SCRIPT_DIR}/mcp-deny-policy.json"
+echo ">>> Step 10/10: Tool governance via IAP Allow Policy..."
+echo "    Agent Gateway is default-deny: all tool access blocked unless explicitly allowed."
+echo "    To grant the agent access to read-only tools, apply an IAP policy:"
+echo ""
+echo "    gcloud beta iap web set-iam-policy iap-allow-policy.json \\"
+echo "        --project=${PROJECT_ID} \\"
+echo "        --mcpServer=MCP_SERVER_ID \\"
+echo "        --region=${REGION}"
+echo ""
+echo "    The policy should grant roles/iap.egressor to the agent's SPIFFE identity"
+echo "    with a CEL condition on iap.googleapis.com/mcp.tool.isReadOnly."
+echo "    (Requires Agent Gateway to be attached to Agent Engine — see GAPS.md)"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
