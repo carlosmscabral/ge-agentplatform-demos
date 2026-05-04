@@ -1,7 +1,7 @@
 {
   "eval_set_id": "basic_eval",
   "name": "Basic Agent Evaluation",
-  "description": "Sample evaluation set for testing core agent functionality. Customize these cases based on your DESIGN_SPEC.md.",
+  "description": "Evaluation set for testing the governance demo agent's financial tools.",
   "eval_cases": [
     {
       "eval_id": "greeting",
@@ -19,11 +19,26 @@
       }
     },
     {
-      "eval_id": "weather_query",
+      "eval_id": "check_balance",
       "conversation": [
         {
           "user_content": {
-            "parts": [{"text": "What's the weather like in San Francisco?"}]
+            "parts": [{"text": "Check my account balance for user123"}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "transfer_funds",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Transfer $100 from user123 to user456"}]
           }
         }
       ],

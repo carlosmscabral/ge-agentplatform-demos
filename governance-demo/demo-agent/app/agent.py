@@ -3,24 +3,22 @@ import os
 from google.adk.agents import Agent
 from google.adk.tools.base_toolset import BaseToolset
 
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL")
-MCP_SERVER_NAME = os.environ.get("MCP_SERVER_NAME")
-REGION = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
-
 
 def _build_mcp_toolset():
-    if MCP_SERVER_NAME:
+    mcp_server_name = os.environ.get("MCP_SERVER_NAME")
+    if mcp_server_name:
         from google.adk.integrations.agent_registry import AgentRegistry
         from google.auth import default
 
         _, project_id = default()
-        registry = AgentRegistry(project_id=project_id, location=REGION)
-        return registry.get_mcp_toolset(MCP_SERVER_NAME)
+        region = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
+        registry = AgentRegistry(project_id=project_id, location=region)
+        return registry.get_mcp_toolset(mcp_server_name)
 
     from google.adk.tools.mcp_tool import McpToolset
     from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
-    url = MCP_SERVER_URL or "http://localhost:8080/mcp"
+    url = os.environ.get("MCP_SERVER_URL") or "http://localhost:8080/mcp"
     return McpToolset(connection_params=StreamableHTTPConnectionParams(url=url))
 
 

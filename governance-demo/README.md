@@ -29,15 +29,25 @@ By default, the Agent Gateway doesn't inherently know if a tool is safe or destr
 Instead of hardcoding MCP server URLs, the agent uses `AgentRegistry.get_mcp_toolset()` to resolve the MCP server endpoint at runtime. This decouples the agent from infrastructure details and enables centralized endpoint management.
 
 ### 4. Agent Gateway Attachment & Python SDK
-The `google-cloud-aiplatform` SDK (`ReasoningEngine.create()`) supports attaching the Agent Gateway via the `config` dictionary:
+The `vertexai.Client` (v1beta1) supports attaching the Agent Gateway at creation time via `AgentEngineConfig`:
 ```python
-config={
-    "agent_gateway_config": {
-        "agent_to_anywhere_config": {"agent_gateway": gateway_id}
+import vertexai
+from vertexai._genai.types.common import AgentEngineConfig, IdentityType
+
+client = vertexai.Client(project=project_id, location=location,
+                         http_options={"api_version": "v1beta1"})
+
+config = AgentEngineConfig(
+    displayName="my-agent",
+    identityType=IdentityType.AGENT_IDENTITY,
+    agentGatewayConfig={
+        "agentToAnywhereConfig": {"agentGateway": gateway_resource_id}
     },
-    "identity_type": 1, # AGENT_IDENTITY (SPIFFE)
-}
+)
+
+agent = client.agent_engines.create(agent=agent_runtime, config=config)
 ```
+See `demo-agent/deploy_agent.py` for the full working implementation.
 
 ### 5. MCP Governance via IAP (Allow-Based)
 The Agent Gateway is **default-deny**: all tool access is blocked unless explicitly allowed. Governance uses **IAP Allow Policies** with `roles/iap.egressor` and CEL conditions that evaluate tool annotations from the Agent Registry:
@@ -128,7 +138,7 @@ Deploy with gateway routing and IAP policy enforcement. Write tools will be bloc
 * **Test 1 (Allowed):** Prompt the agent to "Check my account balance". The agent invokes `get_account_balance` successfully.
 * **Test 2 (Blocked, Option B only):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request due to IAP policy. The agent reports the inability to complete the transaction.
 
-## Known Limitations (April 2026)
+## Known Limitations (May 2026)
 
 * **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting. The networking-level Agent Gateway resource can be created freely, but attaching it to a Reasoning Engine requires backend enablement.
 * **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments. `agents-cli` creates a shell agent first (identity only), then updates with code — the gateway config is silently dropped during the update step.

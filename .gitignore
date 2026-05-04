@@ -1,2 +1,16 @@
 agent-gateway-ug.md
 .claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Runtime artifacts
+*.db
+*.log
+.adk/
+.google-agents-cli/
+
+# Secrets
+.env

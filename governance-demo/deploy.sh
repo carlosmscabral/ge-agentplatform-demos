@@ -30,7 +30,7 @@ echo "  Gateway:  ${GATEWAY_NAME}"
 echo ""
 
 # ─── Step 1: Build & Deploy MCP Server to Cloud Run ─────────────────────────
-echo ">>> Step 1/10: Deploying MCP server to Cloud Run..."
+echo ">>> Step 1/8: Deploying MCP server to Cloud Run..."
 gcloud run deploy "${MCP_SERVICE_NAME}" \
     --source="${SCRIPT_DIR}/mcp-server" \
     --region="${REGION}" \
@@ -45,7 +45,7 @@ echo "    MCP Server URL: ${MCP_URL}"
 
 # ─── Step 2: Create Staging GCS Bucket ───────────────────────────────────────
 echo ""
-echo ">>> Step 2/10: Creating staging bucket ${STAGING_BUCKET}..."
+echo ">>> Step 2/8: Creating staging bucket ${STAGING_BUCKET}..."
 gcloud storage buckets create "${STAGING_BUCKET}" \
     --location="${REGION}" \
     --uniform-bucket-level-access \
@@ -53,7 +53,7 @@ gcloud storage buckets create "${STAGING_BUCKET}" \
 
 # ─── Step 3: Register MCP Server in Agent Registry ──────────────────────────
 echo ""
-echo ">>> Step 3/10: Registering MCP server in Agent Registry..."
+echo ">>> Step 3/8: Registering MCP server in Agent Registry..."
 gcloud alpha agent-registry services delete "${AGENT_REGISTRY_SERVICE_NAME}" \
     --location="${REGION}" --quiet 2>/dev/null || true
 
@@ -71,7 +71,7 @@ echo "    MCP Server Resource: ${MCP_SERVER_RESOURCE}"
 
 # ─── Step 4: Create Agent Gateway ───────────────────────────────────────────
 echo ""
-echo ">>> Step 4/10: Creating Agent Gateway..."
+echo ">>> Step 4/8: Creating Agent Gateway..."
 envsubst < "${SCRIPT_DIR}/gateway.yaml.template" > "/tmp/gateway-rendered.yaml"
 
 gcloud alpha network-services agent-gateways import "${GATEWAY_NAME}" \
@@ -82,21 +82,9 @@ gcloud alpha network-services agent-gateways import "${GATEWAY_NAME}" \
 GATEWAY_RESOURCE_ID="projects/${PROJECT_ID}/locations/${REGION}/agentGateways/${GATEWAY_NAME}"
 echo "    Gateway: ${GATEWAY_RESOURCE_ID}"
 
-# ─── Step 5: IAP Service Extension (placeholder) ──────────────────────────
+# ─── Step 5: Grant IAM Roles to RE Service Account ─────────────────────────
 echo ""
-echo ">>> Step 5/10: IAP service extension..."
-echo "    Skipped: IAP extensions and authz policies are not yet supported on"
-echo "    Google-managed Agent Gateways. Tool governance uses IAM policies instead."
-echo "    (See GAPS.md for details.)"
-
-# ─── Step 6: Authorization Policy (skipped for Google-managed gateways) ─────
-echo ""
-echo ">>> Step 6/10: Authorization policy..."
-echo "    Skipped: Same as Step 5 — requires self-managed gateways."
-
-# ─── Step 7: Grant IAM Roles to RE Service Account ─────────────────────────
-echo ""
-echo ">>> Step 7/10: Granting IAM roles to Reasoning Engine service account..."
+echo ">>> Step 5/8: Granting IAM roles to Reasoning Engine service account..."
 for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry.viewer; do
     gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
         --member="serviceAccount:${RE_SERVICE_ACCOUNT}" \
@@ -105,9 +93,9 @@ for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry
     echo "    Granted ${ROLE}"
 done
 
-# ─── Step 8: Deploy ADK Agent with Gateway Config ──────────────────────────
+# ─── Step 6: Deploy ADK Agent with Gateway Config ──────────────────────────
 echo ""
-echo ">>> Step 8/10: Deploying ADK Agent to Agent Runtime via agents-cli..."
+echo ">>> Step 6/8: Deploying ADK Agent to Agent Runtime via agents-cli..."
 cd "${SCRIPT_DIR}/demo-agent"
 
 agents-cli deploy \
@@ -120,9 +108,9 @@ agents-cli deploy \
 AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])")
 cd "${SCRIPT_DIR}"
 
-# ─── Step 9: Extract SPIFFE ID ─────────────────────────────────────────────
+# ─── Step 7: Extract SPIFFE ID ─────────────────────────────────────────────
 echo ""
-echo ">>> Step 9/10: Extracting Agent SPIFFE ID..."
+echo ">>> Step 7/8: Extracting Agent SPIFFE ID..."
 SPIFFE_ID=$(python3 -c "
 import json
 meta = json.load(open('${SCRIPT_DIR}/demo-agent/deployment_metadata.json'))
@@ -132,9 +120,9 @@ print(meta.get('spiffe_id', '(not available)'))
 echo "    Agent Resource: ${AGENT_RESOURCE_NAME}"
 echo "    Agent SPIFFE ID: ${SPIFFE_ID}"
 
-# ─── Step 10: Apply IAP Allow Policy for Tool Governance ──────────────────
+# ─── Step 8: Apply IAP Allow Policy for Tool Governance ──────────────────
 echo ""
-echo ">>> Step 10/10: Tool governance via IAP Allow Policy..."
+echo ">>> Step 8/8: Tool governance via IAP Allow Policy..."
 echo "    Agent Gateway is default-deny: all tool access blocked unless explicitly allowed."
 echo "    To grant the agent access to read-only tools, apply an IAP policy:"
 echo ""
@@ -158,4 +146,4 @@ echo "║  Gateway:  ${GATEWAY_RESOURCE_ID}"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Test with:"
-echo "  cd demo-agent && PROJECT_ID=${PROJECT_ID} REGION=${REGION} uv run python test_deployed_agent.py"
+echo "  cd demo-agent && agents-cli run --url \$(python3 -c \"import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])\") --mode adk 'Check my account balance for user123'"

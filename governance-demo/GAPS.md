@@ -1,7 +1,7 @@
 # Governance Demo — Known Gaps
 
 What's working vs. what still needs fixing for a clean, production-ready setup.
-Last updated: 2026-04-29.
+Last updated: 2026-05-04.
 
 ---
 
@@ -24,7 +24,7 @@ Last updated: 2026-04-29.
 - The governance model is confirmed: **IAP Allow Policies** with `roles/iap.egressor` (default-deny)
 
 **What has NOT been validated:**
-1. **Gateway attachment to Agent Engine** — requires project-level allowlist from Agent Platform team. Without it: `400 FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. We have not confirmed whether project `vibe-cabral` is allowlisted.
+1. **Gateway attachment to Agent Engine** — requires project-level allowlist from Agent Platform team. Without it: `400 FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. The project's allowlist status has not been confirmed.
 2. **Traffic actually routing through the gateway** — even with attachment, we haven't confirmed the agent's MCP calls go through the gateway vs. direct to Cloud Run.
 3. **IAP policy evaluation** — we don't know if the `iap.googleapis.com/mcp.tool.isReadOnly` attribute is correctly populated from the registry's tool annotations (`readOnlyHint`). The attribute mapping is undocumented.
 4. **Write tool blocking** — the end goal (`transfer_funds` blocked, `get_account_balance` allowed) has never been tested.
@@ -125,5 +125,4 @@ curl -s "https://REGION-aiplatform.googleapis.com/v1beta1/projects/PROJECT/locat
 
 Minor items that don't affect functionality:
 
-- [ ] `deploy.sh` steps 5-6 are no-op placeholders — implement when authz policies work with managed gateways
 - [ ] `deployment_metadata.json` schema differs between `agents-cli` and `deploy_agent.py` — standardize

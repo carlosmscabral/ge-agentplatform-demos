@@ -61,7 +61,7 @@ agent = client.agent_engines.create(
 Note: `google.genai.Client` does NOT have `agent_engines`. The `vertexai.Client` wraps it with the right API version.
 
 ### Authz policies don't work with Google-managed gateways (yet)
-`gcloud beta network-security authz-policies import` requires `loadBalancingScheme` in the target, but no valid value (`INTERNAL_MANAGED`, `INTERNAL_SELF_MANAGED`, `EXTERNAL_MANAGED`) works for Google-managed Agent Gateways. The UG lists this as a roadmap item. Use IAM Deny Policies for tool-level governance instead.
+`gcloud beta network-security authz-policies import` requires `loadBalancingScheme` in the target, but no valid value (`INTERNAL_MANAGED`, `INTERNAL_SELF_MANAGED`, `EXTERNAL_MANAGED`) works for Google-managed Agent Gateways. The UG lists this as a roadmap item. Use IAP Allow Policies for tool-level governance instead (see IAM section below).
 
 ---
 
@@ -211,7 +211,7 @@ app.mount("/", app=routing_app)
 ```
 Use `stateless=True` to avoid session affinity issues on Cloud Run. Use raw ASGI routing (not `Starlette.Mount("/mcp", ...)`) to avoid 307 redirects.
 
-Dependencies: `mcp[cli]`, `starlette`, `uvicorn` (not `fastmcp`).
+Dependencies: `mcp`, `starlette`, `uvicorn` (not `fastmcp`).
 
 ### Tool annotations drive governance
 The `readOnlyHint` and `destructiveHint` annotations in `toolspec.json` are what the Agent Gateway evaluates:

@@ -3,7 +3,7 @@ name = "demo-agent"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Your Name", email = "your@email.com"},
+    {name = "Carlos Cabral"},
 ]
 dependencies = [
     "google-adk[a2a]>=1.29.0,<2.0.0",
@@ -53,7 +53,7 @@ select = [
 ignore = ["E501", "C901", "B006"] # ignore line too long, too complex
 
 [tool.ruff.lint.isort]
-known-first-party = ["app", "frontend"]
+known-first-party = ["app"]
 
 [tool.ty]
 # ty is Astral's Rust-based type checker (same team as ruff/uv)
@@ -78,7 +78,7 @@ deprecated = "ignore"
 
 [tool.codespell]
 ignore-words-list = "rouge"
-skip = "./locust_env/*,uv.lock,.venv,./frontend,**/package-lock.json"
+skip = "uv.lock,.venv,**/package-lock.json"
 
 
 [build-system]
@@ -91,7 +91,7 @@ pythonpath = "."
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app","frontend"]
+packages = ["app"]
 
 [tool.agents-cli]
 deployment_target = "agent_runtime"
