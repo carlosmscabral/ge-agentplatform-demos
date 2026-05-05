@@ -189,6 +189,16 @@ curl -X POST "https://iap.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REG
 
 ---
 
+## Tested & Ruled Out
+
+### Cloud Run `--iap --functional-type=mcp-server`
+
+The docs show `gcloud alpha run services update --iap --functional-type=mcp-server` to enable IAP directly on the Cloud Run MCP server. **This is a separate path from the gateway approach** — it's for direct client-to-MCP server IAP enforcement, not for gateway-mediated traffic.
+
+When enabled, the Cloud Run service requires IAP-authenticated requests. The gateway's mTLS connection doesn't carry IAP credentials, resulting in `401 Unauthorized` on MCP tool calls. **Do not enable `--iap` on Cloud Run when using Agent Gateway.**
+
+---
+
 ## Unclear / Needs Investigation
 
 - [ ] **`unregisteredEndpoint` resolution**: The gateway sends ALL traffic as `unregisteredEndpoint` despite the MCP server being registered. Is this a bug, a missing config, or expected behavior that the IAP evaluation handles internally?
