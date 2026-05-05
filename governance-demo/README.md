@@ -1,6 +1,6 @@
 # Google Agent Platform Governance Demo
 
-Demonstrates how to build and govern agents on Google Cloud's Agent Platform using the **Agent Developer Kit (ADK)**, **Reasoning Engine (Agent Runtime)**, **Agent Registry**, **Agent Gateway**, and **IAP Allow Policies**.
+Demonstrates how to build and govern agents on Google Cloud's Agent Platform using the **Agent Developer Kit (ADK)**, **Reasoning Engine (Agent Runtime)**, **Agent Registry**, **Agent Gateway**, and **Authorization Policies**.
 
 ## Architecture
 
@@ -8,9 +8,9 @@ Demonstrates how to build and govern agents on Google Cloud's Agent Platform usi
     * `get_account_balance` (read-only)
     * `transfer_funds` (destructive/write-operation)
 2. **Agent Registry**: The central catalog where the MCP server is registered, mapping the endpoint URL and attaching metadata (the Tool Spec) to each exposed tool. The ADK agent uses `AgentRegistry.get_mcp_toolset()` for **runtime endpoint discovery** instead of hardcoding URLs.
-3. **Agent Gateway**: A managed `AGENT_TO_ANYWHERE` networking and security gateway. It intercepts requests going from the Reasoning Engine to external or internal tools.
-4. **ADK Agent**: A simple LLM agent deployed into **Reasoning Engine** (Agent Runtime). The deployment configures the agent to route its MCP traffic through the Agent Gateway using `agent_gateway_config`.
-5. **IAP Allow Policy**: The cornerstone of the governance. The Agent Gateway is **default-deny** — all tool access is blocked unless explicitly allowed. An IAP policy grants `roles/iap.egressor` to the agent's SPIFFE identity with CEL conditions that evaluate tool annotations (e.g., `readOnlyHint`).
+3. **Agent Gateway**: A managed `AGENT_TO_ANYWHERE` networking and security gateway. It intercepts requests going from the Reasoning Engine to external or internal tools. Default-deny — all tool access blocked unless explicitly allowed.
+4. **ADK Agent**: A simple LLM agent deployed into **Reasoning Engine** (Agent Runtime). The deployment configures the agent to route its MCP traffic through the Agent Gateway using `agentGatewayConfig`.
+5. **Authorization Policies**: Tool governance via `gcloud beta network-security authz-policies` with MCP tool-name matching. An ALLOW policy grants access to specific tools (`get_account_balance`), while everything else is blocked by default.
 
 ---
 
@@ -47,23 +47,48 @@ config = AgentEngineConfig(
 
 agent = client.agent_engines.create(agent=agent_runtime, config=config)
 ```
-See `demo-agent/deploy_agent.py` for the full working implementation.
+See `demo-agent/deploy_agent.py` for the full working implementation. **Note:** `agents-cli deploy` silently drops gateway config — use `deploy_agent.py` instead.
 
-### 5. MCP Governance via IAP (Allow-Based)
-The Agent Gateway is **default-deny**: all tool access is blocked unless explicitly allowed. Governance uses **IAP Allow Policies** with `roles/iap.egressor` and CEL conditions that evaluate tool annotations from the Agent Registry:
+### 5. Tool Governance via Authorization Policies
+The Agent Gateway is **default-deny**: all tool access is blocked unless explicitly allowed. Governance uses **authorization policies** with MCP tool-name matching:
 
-```bash
-# Grant the agent's SPIFFE identity access to read-only tools only
-gcloud beta iap web set-iam-policy policy.json \
-    --project=PROJECT_ID \
-    --mcpServer=MCP_SERVER_ID \
-    --region=REGION
+```yaml
+# authz-allow-readonly.yaml.template
+name: allow-readonly-tools
+target:
+  resources:
+    - "projects/${PROJECT_ID}/locations/${REGION}/agentGateways/${GATEWAY_NAME}"
+policyProfile: REQUEST_AUTHZ
+httpRules:
+  - to:
+      operations:
+        - mcp:
+            baseProtocolMethodsOption: MATCH_BASE_PROTOCOL_METHODS
+            methods:
+              - name: "tools/list"
+              - name: "tools/call"
+                params:
+                  - exact: "get_account_balance"
+action: ALLOW
 ```
 
-The IAP policy evaluates attributes like `iap.googleapis.com/mcp.tool.isReadOnly` (mapped from the `readOnlyHint` annotation in `toolspec.json` and the MCP server's `list_tools()` response).
+Applied via:
+```bash
+gcloud beta network-security authz-policies import allow-readonly-tools \
+    --source=authz-allow-readonly.yaml --location=REGION
+```
 
-### 6. IAP vs IAM Deny Policies
-Earlier documentation referenced IAM Deny Policies — this is **outdated**. The correct model is IAP Allow Policies via the Agent Gateway. IAM Deny Policies operate at the project level without a gateway enforcement point and use different attribute names (`mcp.googleapis.com/...` vs `iap.googleapis.com/...`).
+`baseProtocolMethodsOption: MATCH_BASE_PROTOCOL_METHODS` is required so the gateway doesn't break MCP session establishment.
+
+### 6. IAP Delegation via Service Extensions
+Authorization policies delegate to IAP via a Service Extension:
+```yaml
+name: iap-authz-ext
+service: iap.googleapis.com
+failOpen: true
+```
+
+This tells the gateway to use IAP for identity-based authorization decisions.
 
 ### 7. Observability and Telemetry
 The Reasoning Engine service account (`service-PROJECT_NUMBER@gcp-sa-aiplatform-re.iam.gserviceaccount.com`) requires `roles/cloudtrace.agent` for Cloud Trace. The deploy script grants this automatically.
@@ -75,57 +100,28 @@ The Reasoning Engine service account (`service-PROJECT_NUMBER@gcp-sa-aiplatform-
 * `gcloud` CLI authenticated with appropriate permissions
 * `uv` package manager installed, `agents-cli` installed (`uv tool install google-agents-cli`)
 * `envsubst` available (standard on Linux/macOS)
-* **Agent Gateway allowlist**: Your project must be allowlisted for the "Agent Gateway for Agent Engine" integration. Without this, attaching a gateway to a Reasoning Engine returns `FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. Request access from the Agent Platform team. (This requirement will likely be removed when the feature reaches GA.)
-* **One gateway per region per type**: Only one `AGENT_TO_ANYWHERE` gateway can exist per project+region. Having two causes the same `FAILED_PRECONDITION` error.
+* **Agent Gateway allowlist**: Your project must be allowlisted for the "Agent Gateway for Agent Engine" integration. Without this, attaching a gateway to a Reasoning Engine returns `FAILED_PRECONDITION: Agent Gateway is not enabled for this project`. (This requirement will likely be removed when the feature reaches GA.)
+* **One gateway per region per type**: Only one `AGENT_TO_ANYWHERE` gateway can exist per project+region.
 
-## Executing the Demo
+## Quick Start
 
-### Option A: Without Agent Gateway (works today)
-
-Deploy the agent without gateway routing. Both tools (read + write) will succeed — no governance enforcement.
-
-1. Copy the environment template and fill in your values:
+1. Copy the environment template and fill in your project ID:
    ```bash
    cp .env.template .env
+   # Edit .env — set PROJECT_ID
    ```
 
-2. Deploy infrastructure (MCP server, bucket, registry, gateway, IAM roles):
+2. Deploy everything (MCP server, registry, gateway, agent, authz policies):
    ```bash
    ./deploy.sh
    ```
 
-3. Deploy the agent via `agents-cli`:
+3. Test:
    ```bash
    cd demo-agent
-   agents-cli deploy --project PROJECT_ID --region us-central1 --agent-identity \
-     --update-env-vars "MCP_SERVER_NAME=MCP_SERVER_RESOURCE,MCP_SERVER_URL=https://MCP_URL/mcp,GEMINI_MODEL=gemini-3-flash-preview,LOGS_BUCKET_NAME=PROJECT_ID-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
-     --no-confirm-project
+   agents-cli run --url $(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])") \
+     --mode adk 'Check my account balance for user123'
    ```
-
-4. Test:
-   ```bash
-   agents-cli run "Check my account balance for user123"
-   ```
-
-### Option B: With Agent Gateway (requires allowlist)
-
-Deploy with gateway routing and IAP policy enforcement. Write tools will be blocked.
-
-1. Complete steps 1-2 from Option A.
-
-2. Deploy the agent using `deploy_agent.py` (single-call create with gateway):
-   ```bash
-   cd demo-agent
-   PROJECT_ID=your-project REGION=us-central1 \
-     MCP_SERVER_URL=https://MCP_URL/mcp \
-     AGENT_GATEWAY_RESOURCE_ID=projects/your-project/locations/us-central1/agentGateways/your-gateway \
-     uv run python deploy_agent.py
-   ```
-   Note: `agents-cli deploy` does not support `agent_gateway_config` — use `deploy_agent.py` for gateway deployments. The gateway **must** be attached at creation time (cannot be added to an existing engine, cannot be unbound).
-
-3. Apply IAP policies for tool governance.
-
-4. Test — `get_account_balance` should succeed, `transfer_funds` should be blocked.
 
 ### Cleanup
 
@@ -135,16 +131,18 @@ Deploy with gateway routing and IAP policy enforcement. Write tools will be bloc
 
 ## Demo Flow
 
-* **Test 1 (Allowed):** Prompt the agent to "Check my account balance". The agent invokes `get_account_balance` successfully.
-* **Test 2 (Blocked, Option B only):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request due to IAP policy. The agent reports the inability to complete the transaction.
+* **Test 1 (Allowed):** Prompt the agent to "Check my account balance". The agent invokes `get_account_balance` — allowed by the authz policy.
+* **Test 2 (Blocked):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request (not in the ALLOW list). The agent reports the inability to complete the transaction.
 
 ## Known Limitations (May 2026)
 
-* **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting. The networking-level Agent Gateway resource can be created freely, but attaching it to a Reasoning Engine requires backend enablement.
-* **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments. `agents-cli` creates a shell agent first (identity only), then updates with code — the gateway config is silently dropped during the update step.
-* **Agent Registry auth requires SPIFFE permissions**: `AgentRegistry.get_mcp_toolset()` authenticates via the agent's SPIFFE identity, not the RE service account. The SPIFFE principal needs `roles/agentregistry.viewer` (currently using `roles/owner` as a blunt workaround). A `_LazyToolset` wrapper is also required to defer the registry call past Agent Runtime's deploy health checks.
-* **Authz policies on Google-managed gateways**: `gcloud beta network-security authz-policies import` rejects all `loadBalancingScheme` values for Google-managed gateways. The correct mechanism is IAP Allow Policies with `roles/iap.egressor`.
-* **Full gateway flow unvalidated**: The end-to-end governance chain (gateway attachment → traffic routing → IAP policy evaluation → tool blocking) has not been validated yet. See `GAPS.md` for the full breakdown.
+* **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting.
+* **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments.
+* **Gateway is creation-time only**: Cannot add/remove gateway from an existing Agent Engine. Must delete and recreate.
+* **`_LazyToolset` wrapper required**: Agent Runtime imports the agent module during health checks. Registry calls during import fail, so tools must be lazily initialized.
+* **MCP server is unauthenticated**: Deployed with `--allow-unauthenticated` for demo simplicity.
+
+See [GAPS.md](GAPS.md) for the full breakdown.
 
 ## Configuration
 

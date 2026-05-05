@@ -22,13 +22,13 @@ echo "  Region:   ${REGION}"
 echo ""
 
 # ─── Step 1: Delete IAP Allow Policy (if applied) ─────────────────────────
-echo ">>> Step 1/5: IAP Allow Policy cleanup..."
+echo ">>> Step 1/7: IAP Allow Policy cleanup..."
 echo "    If an IAP allow policy was applied, remove it manually:"
 echo "    gcloud beta iap web remove-iam-policy-binding ... --project=${PROJECT_ID}"
 
 # ─── Step 2: Delete ADK Agent ──────────────────────────────────────────────
 echo ""
-echo ">>> Step 2/5: Deleting ADK Agent from Agent Runtime..."
+echo ">>> Step 2/7: Deleting ADK Agent from Agent Runtime..."
 if [ -f "${SCRIPT_DIR}/demo-agent/deployment_metadata.json" ]; then
     AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('${SCRIPT_DIR}/demo-agent/deployment_metadata.json'))['remote_agent_runtime_id'])")
     RE_ID=$(echo "${AGENT_RESOURCE_NAME}" | grep -oP 'reasoningEngines/\K[0-9]+')
@@ -42,21 +42,32 @@ else
     echo "    No deployment artifact found, skipping agent deletion."
 fi
 
-# ─── Step 3: Delete Agent Gateway ──────────────────────────────────────────
+# ─── Step 3: Delete Authorization Policies & Extensions ───────────────────
 echo ""
-echo ">>> Step 3/5: Deleting Agent Gateway..."
+echo ">>> Step 3/7: Deleting authorization policies..."
+gcloud beta network-security authz-policies delete agent-authz-profile \
+    --location="${REGION}" --quiet 2>/dev/null || echo "    Authz policy not found."
+
+echo ""
+echo ">>> Step 4/7: Deleting authz extensions..."
+gcloud beta service-extensions authz-extensions delete iap-authz-ext \
+    --location="${REGION}" --quiet 2>/dev/null || echo "    Authz extension not found."
+
+# ─── Step 5: Delete Agent Gateway ──────────────────────────────────────────
+echo ""
+echo ">>> Step 5/7: Deleting Agent Gateway..."
 gcloud alpha network-services agent-gateways delete "${GATEWAY_NAME}" \
     --location="${REGION}" --quiet 2>/dev/null || echo "    Gateway not found."
 
-# ─── Step 4: Unregister from Agent Registry ────────────────────────────────
+# ─── Step 6: Unregister from Agent Registry ────────────────────────────────
 echo ""
-echo ">>> Step 4/5: Unregistering MCP server from Agent Registry..."
+echo ">>> Step 6/7: Unregistering MCP server from Agent Registry..."
 gcloud alpha agent-registry services delete "${AGENT_REGISTRY_SERVICE_NAME}" \
     --location="${REGION}" --quiet 2>/dev/null || echo "    Registry entry not found."
 
-# ─── Step 5: Delete MCP Server from Cloud Run ─────────────────────────────
+# ─── Step 7: Delete MCP Server from Cloud Run ─────────────────────────────
 echo ""
-echo ">>> Step 5/5: Deleting MCP Server from Cloud Run..."
+echo ">>> Step 7/7: Deleting MCP Server from Cloud Run..."
 gcloud run services delete "${MCP_SERVICE_NAME}" \
     --platform managed --region "${REGION}" --quiet \
     || echo "    MCP service not found."

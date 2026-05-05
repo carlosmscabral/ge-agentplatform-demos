@@ -1,0 +1,6 @@
+name: iap-authz-ext
+service: iap.googleapis.com
+metadata:
+  iamEnforcementMode: DRY_RUN
+failOpen: true
+timeout: "10s"

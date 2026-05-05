@@ -30,7 +30,7 @@ echo "  Gateway:  ${GATEWAY_NAME}"
 echo ""
 
 # ─── Step 1: Build & Deploy MCP Server to Cloud Run ─────────────────────────
-echo ">>> Step 1/8: Deploying MCP server to Cloud Run..."
+echo ">>> Step 1/9: Deploying MCP server to Cloud Run..."
 gcloud run deploy "${MCP_SERVICE_NAME}" \
     --source="${SCRIPT_DIR}/mcp-server" \
     --region="${REGION}" \
@@ -45,7 +45,7 @@ echo "    MCP Server URL: ${MCP_URL}"
 
 # ─── Step 2: Create Staging GCS Bucket ───────────────────────────────────────
 echo ""
-echo ">>> Step 2/8: Creating staging bucket ${STAGING_BUCKET}..."
+echo ">>> Step 2/9: Creating staging bucket ${STAGING_BUCKET}..."
 gcloud storage buckets create "${STAGING_BUCKET}" \
     --location="${REGION}" \
     --uniform-bucket-level-access \
@@ -53,7 +53,7 @@ gcloud storage buckets create "${STAGING_BUCKET}" \
 
 # ─── Step 3: Register MCP Server in Agent Registry ──────────────────────────
 echo ""
-echo ">>> Step 3/8: Registering MCP server in Agent Registry..."
+echo ">>> Step 3/9: Registering MCP server in Agent Registry..."
 gcloud alpha agent-registry services delete "${AGENT_REGISTRY_SERVICE_NAME}" \
     --location="${REGION}" --quiet 2>/dev/null || true
 
@@ -71,7 +71,7 @@ echo "    MCP Server Resource: ${MCP_SERVER_RESOURCE}"
 
 # ─── Step 4: Create Agent Gateway ───────────────────────────────────────────
 echo ""
-echo ">>> Step 4/8: Creating Agent Gateway..."
+echo ">>> Step 4/9: Creating Agent Gateway..."
 envsubst < "${SCRIPT_DIR}/gateway.yaml.template" > "/tmp/gateway-rendered.yaml"
 
 gcloud alpha network-services agent-gateways import "${GATEWAY_NAME}" \
@@ -84,7 +84,7 @@ echo "    Gateway: ${GATEWAY_RESOURCE_ID}"
 
 # ─── Step 5: Grant IAM Roles to RE Service Account ─────────────────────────
 echo ""
-echo ">>> Step 5/8: Granting IAM roles to Reasoning Engine service account..."
+echo ">>> Step 5/9: Granting IAM roles to Reasoning Engine service account..."
 for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry.viewer; do
     gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
         --member="serviceAccount:${RE_SERVICE_ACCOUNT}" \
@@ -93,47 +93,76 @@ for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry
     echo "    Granted ${ROLE}"
 done
 
-# ─── Step 6: Deploy ADK Agent with Gateway Config ──────────────────────────
+# ─── Step 6: Create IAP Authorization Extension & Policy ─────────────────
+# MUST be done BEFORE agent deployment — the gateway is default-deny,
+# and without an authz policy the agent can't reach any APIs.
 echo ""
-echo ">>> Step 6/8: Deploying ADK Agent to Agent Runtime via agents-cli..."
+echo ">>> Step 6/9: Creating IAP authorization extension and policy..."
+envsubst < "${SCRIPT_DIR}/iap-authz-extension.yaml.template" > "/tmp/iap-authz-extension.yaml"
+envsubst < "${SCRIPT_DIR}/authz-profile.yaml.template" > "/tmp/authz-profile.yaml"
+
+gcloud service-extensions authz-extensions import iap-authz-ext \
+    --source="/tmp/iap-authz-extension.yaml" \
+    --location="${REGION}" \
+    --quiet 2>/dev/null || echo "    IAP authz extension already exists."
+
+gcloud beta network-security authz-policies import agent-authz-profile \
+    --source="/tmp/authz-profile.yaml" \
+    --location="${REGION}" \
+    --quiet 2>/dev/null || echo "    Authz policy already exists."
+
+echo "    IAP extension: iap-authz-ext (DRY_RUN mode)"
+echo "    Authz policy:  agent-authz-profile -> ${GATEWAY_RESOURCE_ID}"
+
+# ─── Step 7: Deploy ADK Agent with Gateway Config ──────────────────────────
+echo ""
+echo ">>> Step 7/9: Deploying ADK Agent to Agent Runtime with gateway..."
 cd "${SCRIPT_DIR}/demo-agent"
 
-agents-cli deploy \
-    --project "${PROJECT_ID}" \
-    --region "${REGION}" \
-    --agent-identity \
-    --update-env-vars "MCP_SERVER_NAME=${MCP_SERVER_RESOURCE},MCP_SERVER_URL=${MCP_URL}/mcp,GEMINI_MODEL=${GEMINI_MODEL:-gemini-3-flash-preview},LOGS_BUCKET_NAME=${PROJECT_ID}-agent-staging,OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=NO_CONTENT,GOOGLE_CLOUD_LOCATION=global" \
-    --no-confirm-project
+AGENT_GATEWAY_RESOURCE_ID="${GATEWAY_RESOURCE_ID}" \
+MCP_SERVER_NAME="${MCP_SERVER_RESOURCE}" \
+MCP_SERVER_URL="${MCP_URL}/mcp" \
+    uv run python deploy_agent.py
 
 AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])")
 cd "${SCRIPT_DIR}"
 
-# ─── Step 7: Extract SPIFFE ID ─────────────────────────────────────────────
+# ─── Step 8: Extract SPIFFE ID & Grant Registry Access ───────────────────
 echo ""
-echo ">>> Step 7/8: Extracting Agent SPIFFE ID..."
-SPIFFE_ID=$(python3 -c "
-import json
-meta = json.load(open('${SCRIPT_DIR}/demo-agent/deployment_metadata.json'))
-print(meta.get('spiffe_id', '(not available)'))
-") || SPIFFE_ID="(not available)"
+echo ">>> Step 8/9: Extracting Agent SPIFFE ID and granting registry access..."
+RE_ID=$(echo "${AGENT_RESOURCE_NAME}" | grep -oP 'reasoningEngines/\K[0-9]+')
+SPIFFE_ID=$(curl -s \
+    "https://${REGION}-aiplatform.googleapis.com/v1beta1/projects/${PROJECT_NUMBER}/locations/${REGION}/reasoningEngines/${RE_ID}" \
+    -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('effectiveIdentity','(not available)'))")
 
 echo "    Agent Resource: ${AGENT_RESOURCE_NAME}"
 echo "    Agent SPIFFE ID: ${SPIFFE_ID}"
 
-# ─── Step 8: Apply IAP Allow Policy for Tool Governance ──────────────────
+if [ "${SPIFFE_ID}" != "(not available)" ]; then
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="principal://${SPIFFE_ID}" \
+        --role="roles/agentregistry.viewer" \
+        --condition=None --quiet > /dev/null 2>&1 || true
+    echo "    Granted roles/agentregistry.viewer to SPIFFE identity"
+else
+    echo "    WARNING: SPIFFE ID not available. Grant roles/agentregistry.viewer manually."
+fi
+
+# ─── Step 9: Apply IAP Allow Policy for MCP Server ──────────────────────
 echo ""
-echo ">>> Step 8/8: Tool governance via IAP Allow Policy..."
-echo "    Agent Gateway is default-deny: all tool access blocked unless explicitly allowed."
-echo "    To grant the agent access to read-only tools, apply an IAP policy:"
+echo ">>> Step 9/9: IAP tool governance..."
+echo "    The gateway is in DRY_RUN mode — all traffic allowed, policy violations logged."
+echo "    To enforce tool-level governance, create an IAP Allow Policy in the Console:"
+echo "      Agent Platform > Govern > Policies > Create Policy"
+echo "      Source: ${AGENT_DISPLAY_NAME}"
+echo "      Target: finance (MCP Server)"
+echo "      Condition: read-only"
 echo ""
-echo "    gcloud beta iap web set-iam-policy iap-allow-policy.json \\"
-echo "        --project=${PROJECT_ID} \\"
-echo "        --mcpServer=MCP_SERVER_ID \\"
-echo "        --region=${REGION}"
-echo ""
-echo "    The policy should grant roles/iap.egressor to the agent's SPIFFE identity"
-echo "    with a CEL condition on iap.googleapis.com/mcp.tool.isReadOnly."
-echo "    (Requires Agent Gateway to be attached to Agent Engine — see GAPS.md)"
+echo "    Then switch IAP to enforcement mode:"
+echo "      gcloud service-extensions authz-extensions import iap-authz-ext \\"
+echo "        --source=<(echo 'name: iap-authz-ext\nservice: iap.googleapis.com\nfailOpen: true\ntimeout: \"10s\"') \\"
+echo "        --location=${REGION}"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
