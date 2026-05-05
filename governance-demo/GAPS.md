@@ -199,14 +199,30 @@ When enabled, the Cloud Run service requires IAP-authenticated requests. The gat
 
 ---
 
+## Tested & Ruled Out: AgentRegistry-Level IAP Policy
+
+Setting `roles/iap.egressor` at `locations/global/iap_web/agentRegistry` does NOT fix the `unregisteredEndpoint` issue. IAP policies at the AgentRegistry level don't cascade to `endpoints/unregisteredEndpoint`:
+
+```bash
+# These paths accept policies:
+projects/PROJECT/locations/REGION/iap_web/agentRegistry           # AgentRegistry level
+projects/PROJECT/locations/REGION/iap_web/agentRegistry/mcpServers/ID  # MCP server level
+
+# This path does NOT exist (404):
+projects/PROJECT/locations/global/iap_web/agentRegistry/endpoints/unregisteredEndpoint
+```
+
+The `unregisteredEndpoint` is a synthetic IAP resource that cannot have policies set on it.
+
+---
+
 ## Unclear / Needs Investigation
 
-- [ ] **`unregisteredEndpoint` resolution**: The gateway sends ALL traffic as `unregisteredEndpoint` despite the MCP server being registered. Is this a bug, a missing config, or expected behavior that the IAP evaluation handles internally?
-- [ ] **Console-created policies**: Console creates at `iap_web/agentRegistry/mcpServers/MCP_ID` (confirmed via REST API). But the gateway evaluates at `iap_web/agentRegistry/endpoints/unregisteredEndpoint`. Does IAP internally check both?
-- [ ] **Agent Registry-level policy**: Would setting `roles/iap.egressor` at `iap_web/agentRegistry` (entire registry) fix the `unregisteredEndpoint` issue by granting broad access?
-- [ ] **Agent Registry bindings**: Do bindings (`gcloud alpha agent-registry bindings`) affect gateway endpoint resolution? Bindings require `auth_provider` — seem for delegated auth, not routing.
-- [ ] **MCP protocol-level authz**: ALLOW/DENY with `httpRules.operations.mcp` fails with internal error on Google-managed gateways. When will this be operational?
-- [ ] **Tool-level metadata in IAP logs**: CEL variables (`mcp.toolName`, `mcp.tool.isReadOnly`) are documented but don't appear in IAP audit logs. When will MCP protocol parsing populate these?
+- [ ] **`unregisteredEndpoint` is the core blocker**: The gateway evaluates ALL traffic (MCP + internal APIs) at `locations/global/.../endpoints/unregisteredEndpoint`. This resource can't have IAP policies set on it. MCP server-level policies are never evaluated. This prevents IAP enforcement mode from working.
+- [ ] **MCP protocol-level authz policies**: ALLOW/DENY with `httpRules.operations.mcp` (tool-name matching) fails with internal error on Google-managed gateways. Feature is documented in UG but not operational.
+- [ ] **Tool-level metadata in IAP logs**: CEL variables (`mcp.toolName`, `mcp.tool.isReadOnly`) are documented but don't appear in IAP audit logs. MCP protocol parsing doesn't seem to populate these attributes yet.
+- [ ] **Roles `iap.agenticAccess` and `iap.egressViaIap`**: Documented in UG but return "not supported for this resource" when used with current API. Only `roles/iap.egressor` works.
+- [ ] **gcloud flags**: `--resource-type=AgentRegistryResource`, `--mcpServer`, `--agent`, `--endpoint`, `--resource-id` — all documented but not in gcloud alpha/beta CLI yet.
 - [ ] **ADK governance SDK**: UG mentions `from google.adk.governance import AgentGateway` — not available in ADK 1.32.0.
 
 ---
