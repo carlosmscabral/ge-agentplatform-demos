@@ -131,18 +131,28 @@ The Reasoning Engine service account (`service-PROJECT_NUMBER@gcp-sa-aiplatform-
 
 ## Demo Flow
 
-* **Test 1 (Allowed):** Prompt the agent to "Check my account balance". The agent invokes `get_account_balance` — allowed by the authz policy.
-* **Test 2 (Blocked):** Prompt the agent to "Transfer $500 to John". The Agent Gateway blocks the request (not in the ALLOW list). The agent reports the inability to complete the transaction.
+* **Test 1 (Allowed):** Prompt the agent to "Check my account balance for user123". The agent invokes `get_account_balance` through the gateway — returns `$1,500.00`.
+* **Test 2 (Also allowed in DRY_RUN):** Prompt the agent to "Transfer $500 from user123 to user456". In DRY_RUN mode, `transfer_funds` is allowed but logged. IAP audit logs capture the agent identity and target URL.
+* **Audit:** Check IAP logs: `gcloud logging read 'protoPayload.serviceName="iap.googleapis.com"' --project=PROJECT_ID --freshness=10m`
+
+## What's Validated
+
+* Agent deployed with gateway attachment (AGENT_TO_ANYWHERE)
+* IAP DRY_RUN mode: all traffic allowed, every request logged with agent SPIFFE identity and target URL
+* Full chain: Agent -> Gateway -> Agent Registry -> MCP Server -> Tool response -> Gemini -> User
+* Sessions, Gemini LLM calls, MCP tool calls all work through the gateway
+* Console-created IAP policies (Agent Platform > Govern > Policies) scoped to MCP server resources
 
 ## Known Limitations (May 2026)
 
-* **Agent Gateway allowlist required**: The "Agent Gateway for Agent Engine" integration requires project-level allowlisting.
-* **`agents-cli deploy` does not support gateway config**: Use `deploy_agent.py` for gateway deployments.
-* **Gateway is creation-time only**: Cannot add/remove gateway from an existing Agent Engine. Must delete and recreate.
-* **`_LazyToolset` wrapper required**: Agent Runtime imports the agent module during health checks. Registry calls during import fail, so tools must be lazily initialized.
-* **MCP server is unauthenticated**: Deployed with `--allow-unauthenticated` for demo simplicity.
+* **MCP protocol-level authz policies fail**: ALLOW/DENY policies with `httpRules.operations.mcp` (tool-name matching) return internal errors on Google-managed gateways. The feature is documented but not operational.
+* **IAP enforcement blocks internal APIs**: `failOpen: false` blocks ALL outbound traffic (sessions, Gemini), not just MCP tools. The gateway routes everything as `unregisteredEndpoint` to IAP.
+* **IAP logs missing MCP metadata**: Tool names (`mcp.toolName`) and annotations (`mcp.tool.isReadOnly`) don't appear in audit logs — only HTTP URLs are logged.
+* **`agents-cli deploy` drops gateway config**: Must use `deploy_agent.py` with `vertexai.Client` directly.
+* **Gateway is creation-time only**: Cannot add/remove gateway from an existing Agent Engine.
+* **SPIFFE per instance**: Each new agent gets a unique SPIFFE ID — IAM grants must be applied after creation.
 
-See [GAPS.md](GAPS.md) for the full breakdown.
+See [GAPS.md](GAPS.md) for the full breakdown with investigation details.
 
 ## Configuration
 

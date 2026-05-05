@@ -1,87 +1,173 @@
-# Governance Demo — Known Gaps
+# Governance Demo — Known Gaps & Findings
 
-What's working vs. what still needs fixing for a clean, production-ready setup.
+What's working, what's not, and what's unclear.
 Last updated: 2026-05-05.
 
 ---
 
-## Status: Working
+## Validated (Working End-to-End)
 
 - MCP server on **Streamable HTTP** (Cloud Run, stateless mode)
 - **Agent Registry** discovery via `get_mcp_toolset()` — standard SDK pattern
-- Agent deployed to **Agent Runtime** with SPIFFE identity
-- End-to-end tool calls: agent -> registry -> MCP server -> response
-- **Agent Gateway** resource creation (`gcloud alpha network-services agent-gateways import`)
-- **Gateway attachment** at Agent Engine creation via `deploy_agent.py` (project allowlisted)
+- Agent deployed to **Agent Runtime** with **SPIFFE identity**
+- **Agent Gateway** (AGENT_TO_ANYWHERE) attached at Agent Engine creation time
+- **IAP authz extension** (DRY_RUN) + **authz profile** on gateway — unblocks traffic
+- **Full agent chain through gateway**: Session creation, Gemini LLM calls, MCP tool calls (both `get_account_balance` and `transfer_funds`) all work
+- **IAP DRY_RUN audit logs** — every request through the gateway is logged with agent identity, target URL, and grant/deny decision
+- **Console-created IAP policies** scoped to MCP server resources (via Agent Platform > Govern > Policies)
 
 ---
 
-## Resolved: Agent Gateway — project allowlisted
+## Key Architecture Findings
 
-**Previously Gap 1.** The project (`vibe-cabral`) is now allowlisted for Agent Gateway + Agent Engine integration. `deploy_agent.py` uses `vertexai.Client` to create the agent with `agentGatewayConfig` in a single `create()` call. `agents-cli deploy` still silently drops the gateway config — use `deploy_agent.py` instead.
+### Deploy Order is Critical
 
----
+The gateway is **default-deny**. Without an authz extension + policy, the agent can't reach ANY APIs (Gemini, Sessions, MCP servers). The authz extension and policy MUST be created BEFORE deploying the agent:
 
-## Resolved: SPIFFE extraction
+```
+1. MCP server (Cloud Run)
+2. Agent Registry
+3. Gateway
+4. IAP authz extension + authz policy  ← BEFORE agent
+5. Deploy agent with gateway attachment
+6. Grant SPIFFE identity registry access
+```
 
-**Previously Gap 6.** SPIFFE identity is now extracted via REST API after deployment instead of reading from `deployment_metadata.json` (which `agents-cli` never wrote). `deploy_agent.py` also writes the SPIFFE ID to `deployment_metadata.json`.
+### Gateway Intercepts ALL Outbound Traffic
 
----
+When an Agent Engine is deployed with `agentGatewayConfig`, the gateway's mTLS proxy intercepts ALL outbound gRPC/HTTP — not just MCP traffic:
 
-## Gap 1: End-to-end tool governance not yet validated
+| Traffic | URL Pattern | Gateway Behavior |
+|---------|-------------|-----------------|
+| MCP tool calls | `finance-mcp-server-*.run.app/mcp` | Intercepted, logged |
+| Gemini LLM | `aiplatform.mtls.googleapis.com/.../generateContent` | Intercepted, logged |
+| Session service | `us-central1-aiplatform.mtls.googleapis.com/.../sessions/...` | Intercepted, logged |
+| Telemetry | `telemetry.googleapis.com/v1/traces` | Intercepted, logged |
+| Resource Manager | `cloudresourcemanager.googleapis.com` | **Blocked** (gRPC timeout) |
 
-**Impact:** The governance story (gateway routes traffic, authz policy allows read-only tools, blocks write tools) needs end-to-end validation.
+All URLs are rewritten to `*.mtls.googleapis.com` by the gateway proxy.
 
-**What has been set up:**
-1. Agent Gateway resource created (AGENT_TO_ANYWHERE, default-deny)
-2. Agent deployed with gateway attachment (`agentGatewayConfig`)
-3. Authorization policy template (`authz-allow-readonly.yaml.template`) with MCP tool-name matching
-4. IAP authz extension template (`iap-authz-extension.yaml.template`)
+### AdkApp.set_up() Crashes Behind Gateway
 
-**What needs validation:**
-1. Traffic actually routing through the gateway (check Cloud Trace / gateway logs)
-2. Authz policy applied and evaluated — `get_account_balance` allowed, `transfer_funds` blocked
-3. Agent gracefully handles blocked tool calls (reports security policy to user)
+The `AdkApp.project_id()` method calls `resource_manager_utils.get_project_id()` via gRPC, which is blocked by the gateway. The SDK only catches `PermissionDenied` and `Unauthenticated`, not `RetryError` (timeout).
 
----
+**Workaround**: `agent_runtime_app.py` monkey-patches `resource_manager_utils.get_project_id` to catch all exceptions and fall back to the raw project value.
 
-## Gap 2: `_LazyToolset` wrapper required for Agent Runtime deploys
+### SPIFFE Identity Per Agent Instance
 
-**Impact:** Code complexity. The agent can't call `get_mcp_toolset()` at module level because Agent Runtime runs the module during deploy health checks, before the MCP server / registry are reachable.
+Every new Agent Engine instance gets a unique SPIFFE ID (includes the `reasoningEngines/ENGINE_ID`). The SPIFFE must be granted `roles/agentregistry.viewer` AFTER creation — can't be pre-configured. The `effectiveIdentity` field in the API response may take time to populate; the Agent Registry auto-registration shows it immediately.
 
-**Root cause:** Agent Runtime imports the agent module and instantiates it to verify the schema. Network calls during import fail (connection refused or auth not ready).
+### agents-cli Does Not Support Gateway Config
 
-**Fragility:** `_LazyToolset` must match `BaseToolset`'s method signatures exactly. The `get_tools(self, readonly_context=None)` parameter was added by the SDK and broke our wrapper silently (tools just didn't load, no error — model hallucinated tool names).
-
----
-
-## Gap 3: SPIFFE identity permissions need refinement
-
-**Impact:** Security. The agent's SPIFFE identity may have overly broad permissions.
-
-**Target state:**
-- SPIFFE should have `roles/agentregistry.viewer` (for `get_mcp_toolset()`)
-- Possibly `roles/run.invoker` (if MCP server requires auth)
-- Should NOT have `roles/owner`
-
-`deploy.sh` step 8 now grants `roles/agentregistry.viewer` to the SPIFFE identity automatically.
+`agents-cli deploy` silently drops `agentGatewayConfig`. Must use `deploy_agent.py` with `vertexai.Client` directly. Also requires `source_packages` + `class_methods` (generated via `_agent_engines_utils`).
 
 ---
 
-## Gap 4: MCP server has no authentication
+## Gap 1: MCP Protocol-Level Authz Policies Fail on Google-Managed Gateways
 
-**Impact:** The Cloud Run MCP server is deployed with `--allow-unauthenticated`. Anyone with the URL can call it.
+**Impact:** Cannot enforce tool-level blocking (e.g., allow `get_account_balance`, deny `transfer_funds`) using ALLOW/DENY authz policies with MCP `httpRules`.
 
-**To fix:**
-- Remove `--allow-unauthenticated` from `deploy.sh` step 1
-- Grant `roles/run.invoker` to the agent's SPIFFE identity (or the RE service account)
-- The gateway path may handle authentication automatically
+**What we tried:**
+```yaml
+# DENY specific tool
+action: DENY
+httpRules:
+  - to:
+      operations:
+        - mcp:
+            methods:
+              - name: "tools/call"
+                params:
+                  - exact: "transfer_funds"
+
+# ALLOW specific tools only
+action: ALLOW
+httpRules:
+  - to:
+      operations:
+        - mcp:
+            baseProtocolMethodsOption: MATCH_BASE_PROTOCOL_METHODS
+            methods:
+              - name: "tools/call"
+                params:
+                  - exact: "get_account_balance"
+```
+
+**Result:** Both fail with `code: 13, "an internal error has occurred"` after long operation wait. Tested with both short (`projects/...`) and full (`//networkservices.googleapis.com/projects/...`) resource paths.
+
+**Root cause:** MCP protocol parsing for authz policies is documented in the UG but not operational on Google-managed gateways in this release.
 
 ---
 
-## Cleanup backlog
+## Gap 2: IAP Enforcement Blocks Internal Google APIs
 
-Minor items that don't affect functionality:
+**Impact:** Switching IAP from DRY_RUN to enforcement mode (`failOpen: false`, no `iamEnforcementMode: DRY_RUN`) blocks ALL traffic, not just MCP tool calls.
 
-- [ ] `deployment_metadata.json` schema differs between `agents-cli` and `deploy_agent.py` — standardize
-- [ ] Empty `tests/unit/` directory — add unit tests or remove
+**What happens:**
+1. IAP evaluates all gateway traffic against `unregisteredEndpoint` resource
+2. Internal APIs (sessions, Gemini) have no IAP policy and get denied
+3. `failOpen: true` bypasses ALL denials (can't be per-resource)
+4. `failOpen: false` blocks ALL denials (including internal APIs)
+
+**The `unregisteredEndpoint` problem:**
+- ALL traffic through the gateway hits IAP as `projects/PROJECT/locations/global/iap_web/agentRegistry/endpoints/unregisteredEndpoint`
+- The gateway does NOT resolve MCP server URLs to their registered Agent Registry entries
+- Console-created IAP policies (scoped to `iap_web/agentRegistry/mcpServers/MCP_ID`) are never evaluated because traffic never matches that resource path
+- The `unregisteredEndpoint` resource cannot have IAP policies set on it via API (404 Not Found)
+
+**Workaround:** Stay in DRY_RUN mode. IAP logs all requests with agent identity and target URL for audit.
+
+---
+
+## Gap 3: IAP Logs Missing MCP Tool-Level Metadata
+
+**Impact:** DRY_RUN logs don't include tool names, `readOnlyHint`, or other MCP protocol attributes. Only the HTTP URL is logged.
+
+**What IAP logs contain:**
+- Agent SPIFFE identity (`principalSubject`)
+- Target URL (e.g., `https://finance-mcp-server-*.run.app/mcp`)
+- DRY_RUN flag
+- Grant/deny decision
+- IAP resource path (`unregisteredEndpoint`)
+
+**What IAP logs do NOT contain:**
+- MCP tool name (`get_account_balance`, `transfer_funds`)
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`)
+- MCP method (`tools/call`, `tools/list`)
+- Tool parameters
+
+The docs reference attributes `iap.googleapis.com/mcp.toolName` and `iap.googleapis.com/mcp.tool.isReadOnly`, but these don't appear in the audit logs.
+
+---
+
+## Gap 4: `_LazyToolset` Wrapper Required
+
+**Impact:** Code complexity. The agent can't call `get_mcp_toolset()` at module level because Agent Runtime imports the module during deploy health checks.
+
+**Fragility:** `_LazyToolset` must match `BaseToolset`'s method signatures. A silent signature mismatch causes tools to not load — the model hallucinates tool names.
+
+---
+
+## Gap 5: MCP Server Has No Authentication
+
+**Impact:** Cloud Run MCP server deployed with `--allow-unauthenticated`. The gateway routes traffic to it, but anyone with the URL can also call it directly.
+
+---
+
+## Unclear / Needs Investigation
+
+- [ ] **Console vs API policy paths**: Console creates policies at `iap_web/agentRegistry/mcpServers/MCP_ID`, but gateway evaluates at `iap_web/agentRegistry/endpoints/unregisteredEndpoint`. Are these supposed to match?
+- [ ] **Agent Registry bindings**: Do bindings (`gcloud alpha agent-registry bindings`) affect how the gateway resolves registered endpoints? Bindings require `auth_provider` which suggests they're for delegated auth, not gateway routing.
+- [ ] **`--mcpServer` gcloud flag**: Docs show `gcloud beta iap web set-iam-policy --mcpServer=MCP_ID` but the flag doesn't exist in alpha/beta gcloud. When will it be available?
+- [ ] **Tool-level metadata in IAP**: When will `mcp.toolName` and `mcp.tool.isReadOnly` attributes be populated in IAP evaluations?
+- [ ] **`failOpen` per-resource**: Can `failOpen` behavior be scoped to specific resource types (allow unregistered, enforce registered)?
+- [ ] **ADK governance SDK**: UG mentions `from google.adk.governance import AgentGateway` with `AgentGatewayAuthzExt` — is this available in ADK 1.32.0?
+
+---
+
+## Cleanup Backlog
+
+- [ ] `deployment_metadata.json` schema differs between `agents-cli` and `deploy_agent.py`
+- [ ] Empty `tests/unit/` directory
+- [ ] `deploy.sh` step 8 SPIFFE extraction uses `effectiveIdentity` (may not be populated immediately) — should also check Agent Registry
+- [ ] Stale IAP policies at project level (`locations/global/iap_web`, `locations/us-central1/iap_web`) from debugging — clean up
