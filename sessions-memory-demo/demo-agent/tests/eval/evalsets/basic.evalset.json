@@ -1,0 +1,82 @@
+{
+  "eval_set_id": "basic_eval",
+  "name": "Sessions Memory Demo Evaluation",
+  "description": "Evaluation set for the customer support agent with sessions and memory.",
+  "eval_cases": [
+    {
+      "eval_id": "greeting",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Hi, I need help with my account."}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "account_lookup",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Look up account cust_001"}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "ticket_status",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "What's the status of ticket T-1001?"}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "create_ticket",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "Create a high priority ticket for cust_001 about a billing discrepancy on last month's invoice"}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    },
+    {
+      "eval_id": "save_preference",
+      "conversation": [
+        {
+          "user_content": {
+            "parts": [{"text": "I prefer to be contacted via Slack. Please save that preference."}]
+          }
+        }
+      ],
+      "session_input": {
+        "app_name": "app",
+        "user_id": "eval_user",
+        "state": {}
+      }
+    }
+  ]
+}
