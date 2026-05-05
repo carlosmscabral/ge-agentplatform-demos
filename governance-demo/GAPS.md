@@ -199,6 +199,20 @@ When enabled, the Cloud Run service requires IAP-authenticated requests. The gat
 
 ---
 
+## Tested & Ruled Out: Registering Model/Session Endpoints
+
+UG states: *"For the private preview, you must register models in the Agent Registry as endpoints."* We registered the Gemini model and session service as endpoints in Agent Registry, set IAP policies on them — gateway STILL routes as `unregisteredEndpoint`.
+
+**Root cause:** The gateway rewrites URLs to `*.mtls.googleapis.com` (e.g., `aiplatform.mtls.googleapis.com`), but the registry has `*.googleapis.com` URLs. The URL mismatch prevents endpoint resolution. The gateway's URL-based matching doesn't account for the mTLS URL rewrite.
+
+---
+
+## Tested & Ruled Out: Cloud Run `--iap --functional-type=mcp-server`
+
+The `gcloud alpha run services update --iap --functional-type=mcp-server` enables IAP directly on Cloud Run. This is for **direct client-to-MCP** IAP, not gateway-mediated traffic. Enabling it causes `401 Unauthorized` on MCP tool calls through the gateway (gateway doesn't present IAP credentials to Cloud Run).
+
+---
+
 ## Tested & Ruled Out: AgentRegistry-Level IAP Policy
 
 Setting `roles/iap.egressor` at `locations/global/iap_web/agentRegistry` does NOT fix the `unregisteredEndpoint` issue. IAP policies at the AgentRegistry level don't cascade to `endpoints/unregisteredEndpoint`:
