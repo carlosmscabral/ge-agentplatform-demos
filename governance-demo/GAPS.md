@@ -154,14 +154,50 @@ The docs reference attributes `iap.googleapis.com/mcp.toolName` and `iap.googlea
 
 ---
 
+## API Reference: IAP Policies for Agent Gateway
+
+These REST API paths work (confirmed via curl) even though the corresponding gcloud flags don't exist yet:
+
+```bash
+# Read/Write IAP policy on a specific MCP server
+curl -X POST "https://iap.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/iap_web/agentRegistry/mcpServers/{MCP_SERVER_ID}:setIamPolicy" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  -d '{"policy":{"bindings":[{"role":"roles/iap.egressor","members":["principal://..."]}]}}'
+
+# Read/Write IAP policy on entire Agent Registry
+# (untested — may fix unregisteredEndpoint by granting broad access)
+curl -X POST "https://iap.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/iap_web/agentRegistry:setIamPolicy" ...
+```
+
+**gcloud flags (documented, NOT in CLI yet as of May 2026):**
+- `--resource-type=AgentRegistry` — scope to entire Agent Registry
+- `--mcpServer=MCP_SERVER_ID` — scope to specific MCP server
+- `--agent=AGENT_ID` — scope to specific agent
+- `--endpoint=ENDPOINT_ID` — scope to specific endpoint
+
+**CEL condition variables** (prefix with `api.getAttribute('iap.googleapis.com/...')`):
+- `mcp.toolName` (string), `mcp.method`, `mcp.resourceName`, `mcp.promptName`
+- `mcp.tool.isReadOnly`, `mcp.tool.isDestructive`, `mcp.tool.isIdempotent`, `mcp.tool.isOpenWorld` (bool)
+- `request.auth.type` (string, e.g., "MCP")
+
+**Policy evaluation order** (from [LB authz docs](https://docs.cloud.google.com/load-balancing/docs/auth-policy/auth-policy-overview)):
+1. CUSTOM (IAP) — evaluated first
+2. DENY — any match denies
+3. ALLOW — if policies exist but don't match, request **denied by default**
+4. CONTENT_AUTHZ (Model Armor) — last
+
+---
+
 ## Unclear / Needs Investigation
 
-- [ ] **Console vs API policy paths**: Console creates policies at `iap_web/agentRegistry/mcpServers/MCP_ID`, but gateway evaluates at `iap_web/agentRegistry/endpoints/unregisteredEndpoint`. Are these supposed to match?
-- [ ] **Agent Registry bindings**: Do bindings (`gcloud alpha agent-registry bindings`) affect how the gateway resolves registered endpoints? Bindings require `auth_provider` which suggests they're for delegated auth, not gateway routing.
-- [ ] **`--mcpServer` gcloud flag**: Docs show `gcloud beta iap web set-iam-policy --mcpServer=MCP_ID` but the flag doesn't exist in alpha/beta gcloud. When will it be available?
-- [ ] **Tool-level metadata in IAP**: When will `mcp.toolName` and `mcp.tool.isReadOnly` attributes be populated in IAP evaluations?
-- [ ] **`failOpen` per-resource**: Can `failOpen` behavior be scoped to specific resource types (allow unregistered, enforce registered)?
-- [ ] **ADK governance SDK**: UG mentions `from google.adk.governance import AgentGateway` with `AgentGatewayAuthzExt` — is this available in ADK 1.32.0?
+- [ ] **`unregisteredEndpoint` resolution**: The gateway sends ALL traffic as `unregisteredEndpoint` despite the MCP server being registered. Is this a bug, a missing config, or expected behavior that the IAP evaluation handles internally?
+- [ ] **Console-created policies**: Console creates at `iap_web/agentRegistry/mcpServers/MCP_ID` (confirmed via REST API). But the gateway evaluates at `iap_web/agentRegistry/endpoints/unregisteredEndpoint`. Does IAP internally check both?
+- [ ] **Agent Registry-level policy**: Would setting `roles/iap.egressor` at `iap_web/agentRegistry` (entire registry) fix the `unregisteredEndpoint` issue by granting broad access?
+- [ ] **Agent Registry bindings**: Do bindings (`gcloud alpha agent-registry bindings`) affect gateway endpoint resolution? Bindings require `auth_provider` — seem for delegated auth, not routing.
+- [ ] **MCP protocol-level authz**: ALLOW/DENY with `httpRules.operations.mcp` fails with internal error on Google-managed gateways. When will this be operational?
+- [ ] **Tool-level metadata in IAP logs**: CEL variables (`mcp.toolName`, `mcp.tool.isReadOnly`) are documented but don't appear in IAP audit logs. When will MCP protocol parsing populate these?
+- [ ] **ADK governance SDK**: UG mentions `from google.adk.governance import AgentGateway` — not available in ADK 1.32.0.
 
 ---
 
