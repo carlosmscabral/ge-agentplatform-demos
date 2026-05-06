@@ -12,16 +12,9 @@ memory_bank_config = MemoryBankConfig(
     customization_configs=[
         CustomizationConfig(
             memory_topics=[
-                MemoryTopic(
-                    managed_memory_topic=ManagedMemoryTopic(
-                        managed_topic_enum=ManagedTopicEnum.USER_PERSONAL_INFO,
-                    ),
-                ),
-                MemoryTopic(
-                    managed_memory_topic=ManagedMemoryTopic(
-                        managed_topic_enum=ManagedTopicEnum.USER_PREFERENCES,
-                    ),
-                ),
+                # User preferences and personal info are stored in session
+                # user state (user: keys) via get_preferences/update_preference.
+                # Memory Bank only tracks conversation-level insights.
                 MemoryTopic(
                     managed_memory_topic=ManagedMemoryTopic(
                         managed_topic_enum=ManagedTopicEnum.KEY_CONVERSATION_DETAILS,
