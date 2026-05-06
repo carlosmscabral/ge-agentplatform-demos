@@ -1,0 +1,19 @@
+[project]
+name = "demo-agent"
+version = "0.1.0"
+description = "ADK agent demo for Agent Platform"
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk>=1.32.0,<2.0.0",
+    "google-cloud-aiplatform[agent-engines]>=1.149.0",
+    "google-cloud-logging>=3.12.0,<4.0.0",
+    "google-cloud-trace>=1.19.0",
+    "opentelemetry-instrumentation-google-genai>=0.1.0,<1.0.0",
+]
+
+[tool.agents-cli]
+deployment_target = "agent_runtime"
+name = "demo-agent"
+description = "Agent Platform demo"
+base_template = "adk"
+agent_directory = "app"

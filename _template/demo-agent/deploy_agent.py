@@ -1,10 +1,7 @@
-"""Deploy the sessions-memory demo agent to Agent Runtime with Memory Bank.
-
-Uses vertexai.Client directly because agents-cli deploy does not support
-context_spec (required for Memory Bank topic configuration).
+"""Deploy agent to Agent Runtime with SPIFFE identity and full telemetry.
 
 Usage:
-    PROJECT_ID=vibe-cabral REGION=us-central1 uv run python deploy_agent.py
+    PROJECT_ID=my-project REGION=us-central1 uv run python deploy_agent.py
 """
 
 import json
@@ -12,16 +9,10 @@ import os
 import sys
 
 import vertexai
-from vertexai._genai.types import (
-    AgentEngineConfig,
-    IdentityType,
-    ReasoningEngineContextSpec,
-)
-
+from vertexai._genai.types import AgentEngineConfig, IdentityType
 from vertexai._genai import _agent_engines_utils
 
 from app.agent_runtime_app import agent_runtime
-from app.memory_config import memory_bank_config
 
 
 def deploy():
@@ -31,9 +22,9 @@ def deploy():
         sys.exit(1)
 
     location = os.environ.get("REGION", "us-central1")
-    display_name = os.environ.get("AGENT_DISPLAY_NAME", "sessions-memory-demo")
+    display_name = os.environ.get("AGENT_DISPLAY_NAME", "my-demo-agent")
     gemini_model = os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview")
-    logs_bucket = os.environ.get("LOGS_BUCKET_NAME", f"{project_id}-sessions-demo-staging")
+    logs_bucket = os.environ.get("LOGS_BUCKET_NAME", f"{project_id}-demo-staging")
 
     print(f"Project:  {project_id}")
     print(f"Location: {location}")
@@ -60,17 +51,12 @@ def deploy():
     )
     class_methods = [_agent_engines_utils._to_dict(m) for m in class_methods_spec]
 
-    context_spec = ReasoningEngineContextSpec(
-        memory_bank_config=memory_bank_config,
-    )
-
     config = AgentEngineConfig(
         displayName=display_name,
-        stagingBucket=f"gs://{project_id}-sessions-demo-staging",
+        stagingBucket=f"gs://{project_id}-demo-staging",
         envVars=env_vars,
         agentFramework="google-adk",
         identityType=IdentityType.AGENT_IDENTITY,
-        contextSpec=context_spec,
         source_packages=["./app"],
         entrypoint_module="app.agent_runtime_app",
         entrypoint_object="agent_runtime",
@@ -106,7 +92,6 @@ def deploy():
 
     parts = name.split("/")
     engine_id = parts[-1]
-    project_number = parts[1]
 
     print(f"\nPlayground: https://console.cloud.google.com/vertex-ai/agents/agent-engines/"
           f"locations/{location}/agent-engines/{engine_id}/playground?project={project_id}")

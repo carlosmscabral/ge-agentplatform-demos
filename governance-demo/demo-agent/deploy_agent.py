@@ -57,7 +57,7 @@ def deploy():
         "MCP_SERVER_URL": mcp_server_url,
         "GEMINI_MODEL": gemini_model,
         "LOGS_BUCKET_NAME": logs_bucket,
-        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "NO_CONTENT",
+        "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
         "GOOGLE_CLOUD_LOCATION": "global",
         "GOOGLE_CLOUD_REGION": location,
         "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",

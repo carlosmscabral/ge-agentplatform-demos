@@ -16,7 +16,6 @@ GATEWAY_NAME="${GATEWAY_NAME:-demo-agent-gateway}"
 AGENT_REGISTRY_SERVICE_NAME="${AGENT_REGISTRY_SERVICE_NAME:-finance-mcp-service}"
 AGENT_DISPLAY_NAME="${AGENT_DISPLAY_NAME:-demo-agent-governed}"
 STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-agent-staging}"
-RE_SERVICE_ACCOUNT="service-${PROJECT_NUMBER}@gcp-sa-aiplatform-re.iam.gserviceaccount.com"
 
 export PROJECT_ID REGION GATEWAY_NAME
 
@@ -82,16 +81,14 @@ gcloud alpha network-services agent-gateways import "${GATEWAY_NAME}" \
 GATEWAY_RESOURCE_ID="projects/${PROJECT_ID}/locations/${REGION}/agentGateways/${GATEWAY_NAME}"
 echo "    Gateway: ${GATEWAY_RESOURCE_ID}"
 
-# ─── Step 5: Grant IAM Roles to RE Service Account ─────────────────────────
+# ─── Step 5: Verify Principal Set IAM Grants ─────────────────────────────
+# Common roles (agentDefaultAccess, storage.objectAdmin) are granted via
+# principal set in setup-project.sh. This covers all agents in the project.
 echo ""
-echo ">>> Step 5/9: Granting IAM roles to Reasoning Engine service account..."
-for ROLE in roles/cloudtrace.agent roles/storage.objectAdmin roles/agentregistry.viewer; do
-    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-        --member="serviceAccount:${RE_SERVICE_ACCOUNT}" \
-        --role="${ROLE}" \
-        --condition=None --quiet > /dev/null 2>&1 || true
-    echo "    Granted ${ROLE}"
-done
+echo ">>> Step 5/9: Verifying principal set IAM grants..."
+echo "    roles/aiplatform.agentDefaultAccess — covers inference, logging, tracing, monitoring, registry read"
+echo "    roles/storage.objectAdmin — covers telemetry GCS uploads"
+echo "    (Granted via setup-project.sh principal set — no per-agent grants needed)"
 
 # ─── Step 6: Create IAP Authorization Extension & Policy ─────────────────
 # MUST be done BEFORE agent deployment — the gateway is default-deny,

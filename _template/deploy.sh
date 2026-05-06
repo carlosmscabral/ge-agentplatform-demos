@@ -10,12 +10,12 @@ fi
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
-STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-sessions-demo-staging}"
+STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-demo-staging}"
 
 export PROJECT_ID REGION
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     Agent Platform Sessions & Memory Demo — Deploy          ║"
+echo "║              Agent Platform Demo — Deploy                   ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Project:  ${PROJECT_ID}"
@@ -23,7 +23,7 @@ echo "  Region:   ${REGION}"
 echo ""
 
 # ─── Step 1: Create Staging GCS Bucket ───────────────────────────────────────
-echo ">>> Step 1/3: Creating staging bucket ${STAGING_BUCKET}..."
+echo ">>> Step 1/N: Creating staging bucket ${STAGING_BUCKET}..."
 gcloud storage buckets create "${STAGING_BUCKET}" \
     --location="${REGION}" \
     --uniform-bucket-level-access \
@@ -33,17 +33,14 @@ gcloud storage buckets create "${STAGING_BUCKET}" \
 # Common roles (agentDefaultAccess, storage.objectAdmin) are granted via
 # principal set in setup-project.sh. This covers all agents in the project.
 echo ""
-echo ">>> Step 2/3: Verifying principal set IAM grants..."
+echo ">>> Step 2/N: Verifying principal set IAM grants..."
 echo "    roles/aiplatform.agentDefaultAccess — covers inference, logging, tracing, monitoring, registry read"
 echo "    roles/storage.objectAdmin — covers telemetry GCS uploads"
 echo "    (Granted via setup-project.sh principal set — no per-agent grants needed)"
 
-# ─── Step 3: Deploy Agent with Memory Bank via deploy_agent.py ──────────────
-# agents-cli deploy does not support context_spec (required for Memory Bank).
-# deploy_agent.py uses vertexai.Client directly to pass ReasoningEngineContextSpec
-# with memory_bank_config, source_packages, and class_methods.
+# ─── Step 3: Deploy Agent ─────────────────────────────────────────────────
 echo ""
-echo ">>> Step 3/3: Deploying Agent with Memory Bank config..."
+echo ">>> Step 3/N: Deploying Agent..."
 cd "${SCRIPT_DIR}/demo-agent"
 
 uv run python deploy_agent.py
@@ -51,19 +48,9 @@ uv run python deploy_agent.py
 AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])")
 cd "${SCRIPT_DIR}"
 
-RE_ID=$(echo "${AGENT_RESOURCE_NAME}" | grep -oP 'reasoningEngines/\K[0-9]+')
-AGENT_URL="https://${REGION}-aiplatform.googleapis.com/v1beta1/${AGENT_RESOURCE_NAME}"
-
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║                  Deployment Complete                        ║"
 echo "╠══════════════════════════════════════════════════════════════╣"
 echo "║  Agent:  ${AGENT_RESOURCE_NAME}"
 echo "╚══════════════════════════════════════════════════════════════╝"
-echo ""
-echo "Test with:"
-echo "  cd demo-agent && agents-cli run --url '${AGENT_URL}' --mode adk 'Look up account cust_001'"
-echo ""
-echo "Run the demo scripts:"
-echo "  cd demo-agent && uv run python ../scripts/demo_stateless.py"
-echo "  cd demo-agent && uv run python ../scripts/demo_stateful.py"
