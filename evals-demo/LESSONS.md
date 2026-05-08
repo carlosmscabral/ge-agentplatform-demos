@@ -250,30 +250,70 @@ The monitor polls periodically. Send several queries via playground or `agents-c
 
 ---
 
-## 7. Offline Evaluation (Console)
+## 7. Offline Evaluation (Programmatic)
 
-For one-time assessments of historical traces/sessions:
+For one-time assessment of your deployed agent, use the `client.evals` SDK. There are two APIs — use `evaluate()` for scores.
 
-### Step 1: Navigate to Evaluation
+### `evaluate()` — returns metric scores (not persisted)
 
-**Console > Agent Platform > Agents > Evaluation** (top-level, not per-agent)
+This is what actually computes scores. It runs client-side, calling the Gen AI Evaluation Service for each prompt/metric. Results are returned in-memory.
 
-### Step 2: Create evaluation
+```python
+import pandas as pd
+import vertexai
+from google.genai import types as genai_types
+from vertexai import Client, types
 
-1. Click **New Evaluation**
-2. Select **Traces** or **Sessions** tab
-3. Filter by time range, version, or other criteria
-4. Select the traces/sessions you want to evaluate
-5. Click **Continue**
-6. Choose metrics and provide a GCS output path
-7. Click **Evaluate Agent**
+client = Client(project=PROJECT_ID, location="us-central1",
+                http_options=genai_types.HttpOptions(api_version="v1beta1"))
 
-### Step 3: View results
+# Run inference against the deployed agent
+session_inputs = types.evals.SessionInput(user_id="eval_user", state={})
+dataset = pd.DataFrame({
+    "prompt": [
+        "What's the status of order ORD-123?",
+        "How do I reset my password?",
+        "My order ORD-456 arrived damaged, I need to file a complaint.",
+    ],
+    "session_inputs": [session_inputs] * 3,
+})
 
-Results appear in the Evaluations list. Click an evaluation name to see:
-- Summary metrics (mean scores)
-- Per-trace breakdown with scores and rubric verdicts
-- Click any row to drill into the associated trace
+inference = client.evals.run_inference(agent=AGENT_RESOURCE_NAME, src=dataset)
+
+# Evaluate with adaptive rubrics
+result = client.evals.evaluate(
+    dataset=inference,
+    metrics=[
+        types.RubricMetric.FINAL_RESPONSE_QUALITY,
+        types.RubricMetric.HALLUCINATION,
+        types.RubricMetric.SAFETY,
+    ],
+)
+
+# Print aggregate scores
+for m in result.summary_metrics:
+    print(f"{m.metric_name}: {m.mean_score:.3f} (pass: {m.pass_rate:.0%})")
+```
+
+### `create_evaluation_run()` — persists traces to console (scores not yet populated)
+
+This registers an evaluation run that's visible in the console under Evaluation, but as of May 2026, metric scores in the persisted results are empty. The run captures traces and inference data — useful for auditing — but for actual scores, use `evaluate()`.
+
+```python
+# Persists to GCS + console, but metric scores are empty in results
+eval_run = client.evals.create_evaluation_run(
+    dataset=inference,
+    agent_info=types.evals.AgentInfo.load_from_agent(agent=root_agent),
+    agent=AGENT_RESOURCE_NAME,
+    metrics=[types.RubricMetric.FINAL_RESPONSE_QUALITY, ...],
+    dest="gs://my-bucket/eval-results/",
+)
+# eval_run.name gives you the run ID visible in console
+```
+
+### Practical recommendation
+
+Use both together: `evaluate()` for scores during development, `create_evaluation_run()` to leave an audit trail, and **online monitors** for continuous production evaluation.
 
 ---
 
@@ -344,6 +384,18 @@ app = App(root_agent=root_agent, name="app")
 ### Online monitors need traces with GenAI events
 
 The monitor message "No online monitor configured, or no matching traces found to evaluate" means the traces exist but lack GenAI event attributes. Fix the telemetry configuration (Section 3) and redeploy.
+
+### `create_evaluation_run()` doesn't populate metric scores (as of May 2026)
+
+The `create_evaluation_run()` API persists an evaluation run that's visible in the console, but the `metric_results` on each eval case come back empty. The run captures inference traces and registers in the Evaluation tab, but actual scores are not stored in the response or GCS output. Use `evaluate()` for scores — it computes them client-side via the Gen AI Evaluation Service API.
+
+### `TOOL_USE_QUALITY` generates contradictory rubrics
+
+The `TOOL_USE_QUALITY` adaptive rubric sometimes generates rubrics like "agent should NOT call tools because no tools were defined" — even though the agent clearly has tools. This happens because `agent_info` (from `AgentInfo.load_from_agent()`) doesn't always propagate tool definitions to the evaluator's rubric generator. Consider omitting this metric and relying on `FINAL_RESPONSE_QUALITY` + `HALLUCINATION` instead.
+
+### Console offline eval opens a Colab notebook
+
+When you click "Evaluate" from the Agent Engine console view, it opens a Colab notebook with `client.evals.get_evaluation_run(...).show()` pre-filled — it doesn't show results inline in the console. The notebook approach works but requires running the cell.
 
 ### Judge model rate limits (429)
 
