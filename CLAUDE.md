@@ -1,5 +1,20 @@
 # Agent Platform Demos — Development Standards
 
+## ADK Development — Skills & References
+
+When working on ADK agent code, scaffolding, deployment, evaluation, observability, or publishing, **always use the `google-agents-cli-*` skills** (`google-agents-cli-workflow`, `google-agents-cli-adk-code`, `google-agents-cli-scaffold`, `google-agents-cli-deploy`, `google-agents-cli-eval`, `google-agents-cli-observability`, `google-agents-cli-publish`). These skills contain up-to-date patterns and must be consulted before writing or modifying agent code.
+
+**External references to consult:**
+
+- **ADK source code** — <https://github.com/google/adk-python>: check for current versions, releases, API changes, and implementation details when writing or debugging ADK agent code.
+- **ADK sample agents** — <https://github.com/google/adk-samples/tree/main/python/agents>: use as inspiration and reference for agent patterns, tool usage, orchestration, and best practices when building new demos.
+
+When building or modifying an agent, fetch the latest relevant code from these repos (releases, agent examples) to ensure patterns are current.
+
+**Google Cloud documentation lookup:**
+
+Always use the `google-dev-knowledge` MCP server (`search_documents`, `get_documents`, `answer_query`) to look up Google Cloud, Firebase, Android, and Maps documentation. Prefer this over `WebFetch` or `WebSearch` for any Google developer docs question — it returns grounded, up-to-date results directly from official sources.
+
 ## Project Structure
 
 ```
@@ -55,7 +70,9 @@ All demos MUST capture full payloads (prompts, responses, tool calls), not just 
 In `deploy_agent.py`:
 ```python
 env_vars = {
-    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "true",
+    "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": "EVENT_ONLY",
+    "OTEL_SEMCONV_STABILITY_OPT_IN": "gen_ai_latest_experimental",
+    "ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS": "false",
     "GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY": "true",
     "LOGS_BUCKET_NAME": f"{project_id}-<demo>-staging",
     ...
