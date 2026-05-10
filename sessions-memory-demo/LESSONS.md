@@ -759,6 +759,33 @@ client.agent_engines.memories.generate(
 )
 ```
 
+### Full cleanup (without deleting the agent)
+
+To wipe all persistent data for a fresh demo, use the cleanup script:
+
+```bash
+cd demo-agent
+uv run python ../scripts/cleanup_sessions_memories.py          # interactive confirm
+uv run python ../scripts/cleanup_sessions_memories.py --dry-run # preview only
+```
+
+This handles all three layers in the correct order:
+1. Nullifies `user:` state via REST `appendEvent` (must happen while sessions exist)
+2. Deletes all sessions
+3. Purges all Memory Bank entries
+
+See § 13 ("user: state survives session deletion") for why simple session deletion is not enough.
+
+### Purge memories (bulk)
+
+```python
+client.agent_engines.memories.purge(
+    name=ae,
+    filter='create_time>"1970-01-01T00:00:00Z"',
+    force=True,  # False = dry run (count only)
+)
+```
+
 ---
 
 ## 13. Gotchas and Validated Findings
@@ -789,6 +816,70 @@ On Agent Runtime, you don't instantiate `VertexAiSessionService` or `VertexAiMem
 
 Memory Bank scopes memories by `(app_name, user_id)`. If different sessions use different `user_id` values, memories won't transfer. `agents-cli run` uses `cli-user` by default, which is consistent — but if you're building a frontend, ensure the same authenticated user gets the same `user_id`.
 
+### `user:` state survives session deletion — it's stored at the user level
+
+This is the single most surprising behavior we found. Deleting all sessions for a user does **not** clear their `user:` scoped state. The `VertexAiSessionService` stores `user:` keys in a separate user-level store, not per-session. When a new session is created for the same `user_id`, the `user:` state is automatically injected — even if every prior session was deleted.
+
+```
+                ┌────────────────────────────────────────────┐
+                │         VertexAiSessionService             │
+                │                                            │
+                │  ┌──────────────────┐  ┌───────────────┐  │
+                │  │  Session Store   │  │  User Store    │  │
+                │  │  (per-session)   │  │  (per-user_id) │  │
+                │  │                  │  │                │  │
+                │  │  session state   │  │  user:name     │  │
+                │  │  temp: keys      │  │  user:channel  │  │
+                │  │  events/history  │  │  user:id       │  │
+                │  └──────────────────┘  └───────────────┘  │
+                │         ▲                     ▲           │
+                │   DELETE removes       DELETE does NOT    │
+                │   this data            touch this data    │
+                └────────────────────────────────────────────┘
+```
+
+**Proof**: After deleting all 18 sessions and creating a fresh one for the same `user_id`, the new session immediately had `user:preferred_name = "Carinha do Next"` — a value set in a session that no longer exists.
+
+**Why this matters for cleanup**: If you're resetting an agent for a demo, deleting sessions is not enough. The `user:` state will silently reappear.
+
+### Clearing `user:` state requires `appendEvent` with null `stateDelta`
+
+There is **no dedicated API** for deleting user-level state. The only workaround is to append an event to an active session that sets each `user:` key to `null`:
+
+```bash
+# REST API — appendEvent with null stateDelta
+curl -X POST \
+  "https://LOCATION-aiplatform.googleapis.com/v1beta1/AGENT_NAME/sessions/SESSION_ID:appendEvent" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "author": "system",
+    "invocationId": "cleanup-user-state",
+    "actions": {
+      "stateDelta": {
+        "user:preferred_name": null,
+        "user:customer_id": null,
+        "user:notification_channel": null
+      }
+    },
+    "timestamp": "2026-05-10T18:00:00Z"
+  }'
+```
+
+**Order matters**: you must clear user state *before* deleting the session, because you need an active session to send the `appendEvent`.
+
+**SDK gap**: `client.agent_engines.sessions` does not expose `append_event()` — this must be done via REST API.
+
+### Three persistence layers, three cleanup methods
+
+| Layer | Scope | Survives session delete? | How to clear |
+|-------|-------|--------------------------|-------------|
+| Session state (no prefix) | Per-session | No | Delete session |
+| `user:` state | Per-user_id | **Yes** | `appendEvent` + `stateDelta: null` |
+| Memory Bank | Per-(app, user_id) | Yes (separate store) | `memories:purge` API |
+
+The `cleanup_sessions_memories.py` script in `scripts/` handles all three in the correct order.
+
 ---
 
 ## 14. File Map — Where Everything Lives
@@ -800,9 +891,12 @@ sessions-memory-demo/
 ├── undeploy.sh                  # Teardown: delete agent + bucket instructions
 ├── .env.template                # Config template (PROJECT_ID, REGION, MODEL)
 │
+├── DEMO.md                      # Manual demo script (PT-BR prompts)
 ├── scripts/
 │   ├── demo_stateless.py        # Scenario A: InMemory (shows the break)
-│   └── demo_stateful.py         # Scenario B: Agent Runtime (shows the fix)
+│   ├── demo_stateful.py         # Scenario B: Agent Runtime (shows the fix)
+│   ├── demo_full.py             # Full 3-act demo: state + Memory Bank
+│   └── cleanup_sessions_memories.py  # Wipe sessions, user: state, memories
 │
 └── demo-agent/
     ├── deploy_agent.py          # Direct deploy with context_spec for Memory Bank

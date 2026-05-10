@@ -47,8 +47,10 @@ def get_agent_url():
         sys.exit(1)
 
     with open(METADATA_FILE) as f:
-        metadata = json.load(f)
-    return metadata["remote_agent_runtime_id"]
+        resource_name = json.load(f)["remote_agent_runtime_id"]
+    parts = resource_name.split("/")
+    location = parts[3]
+    return f"https://{location}-aiplatform.googleapis.com/v1beta1/{resource_name}"
 
 
 def run_message(agent_url, message):
