@@ -4,7 +4,7 @@ This file defines the production rules for all demos at the repository root. Dem
 
 ---
 
-## The 10 Rules
+## The 11 Rules
 
 ### Rule #1 — Full Parameterization
 
@@ -158,6 +158,32 @@ fi
 # GEMINI_DISPLAY_NAME=
 # GEMINI_DESCRIPTION=
 ```
+
+### Rule #11 — Unique Agent Names
+
+Every agent in the repo must have a globally unique name — across all demos — to avoid collisions when multiple demos are deployed to the same GCP project simultaneously.
+
+Three identifiers must be unique per agent:
+
+1. **`root_agent.name`** in `agent.py` — this becomes the display name in Agent Registry for A2A agents and the agent label in `agents-cli run` output
+2. **`[tool.agents-cli] name`** in `pyproject.toml` — this is the display name in Agent Runtime (Reasoning Engine) and what `agents-cli deploy` uses to find/update existing agents
+3. **`[project] name`** in `pyproject.toml` — the Python package name; should also be unique to avoid confusion
+
+**Naming convention:** prefix agent names with the demo name or a short unique identifier:
+```
+# a2a-demo
+root_agent = Agent(name="currency_specialist", ...)     # in agent.py
+[tool.agents-cli] name = "specialist-agent"             # in pyproject.toml
+
+# spiffe-registry-demo
+root_agent = Agent(name="spiffe_currency_specialist", ...)
+[tool.agents-cli] name = "spiffe-specialist"
+```
+
+**Why this matters:**
+- `agents-cli deploy` matches by `[tool.agents-cli] name` — if two demos share the same name, deploying one overwrites the other
+- Agent Registry indexes by `root_agent.name` for A2A agents — duplicate names cause ambiguous discovery
+- Undeploy in one demo can accidentally delete another demo's agent
 
 ---
 

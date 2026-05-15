@@ -75,7 +75,7 @@ ge-agentplatform-demos/
 
 ## Development Standards
 
-All demos at root conform to the [10 production rules](CLAUDE.md):
+All demos at root conform to the [11 production rules](CLAUDE.md):
 
 1. **Full Parameterization** — env vars for everything, no hardcoding
 2. **agents-cli First** — scaffold, build, and deploy with agents-cli
@@ -87,3 +87,4 @@ All demos at root conform to the [10 production rules](CLAUDE.md):
 8. **Documentation** — README.md + ARCHITECTURE.md for every demo
 9. **Demo Guide** — DEMO.md with sample prompts, scenarios, and what to observe
 10. **Optional GE Registration** — register agents with Gemini Enterprise Apps via env vars
+11. **Unique Agent Names** — no name collisions across demos for safe concurrent deployment
