@@ -12,7 +12,7 @@ PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
 STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-sessions-demo-staging}"
 
-export PROJECT_ID REGION
+export PROJECT_ID REGION STAGING_BUCKET
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║     Agent Platform Sessions & Memory Demo — Deploy          ║"
@@ -23,27 +23,18 @@ echo "  Region:   ${REGION}"
 echo ""
 
 # ─── Step 1: Create Staging GCS Bucket ───────────────────────────────────────
-echo ">>> Step 1/3: Creating staging bucket ${STAGING_BUCKET}..."
+echo ">>> Step 1/2: Creating staging bucket ${STAGING_BUCKET}..."
 gcloud storage buckets create "${STAGING_BUCKET}" \
     --location="${REGION}" \
     --uniform-bucket-level-access \
     --quiet 2>/dev/null || echo "    Bucket already exists."
 
-# ─── Step 2: Verify Principal Set IAM Grants ──────────────────────────────
-# Common roles (agentDefaultAccess, storage.objectAdmin) are granted via
-# principal set in setup-project.sh. This covers all agents in the project.
-echo ""
-echo ">>> Step 2/3: Verifying principal set IAM grants..."
-echo "    roles/aiplatform.agentDefaultAccess — covers inference, logging, tracing, monitoring, registry read"
-echo "    roles/storage.objectAdmin — covers telemetry GCS uploads"
-echo "    (Granted via setup-project.sh principal set — no per-agent grants needed)"
-
-# ─── Step 3: Deploy Agent with Memory Bank via deploy_agent.py ──────────────
+# ─── Step 2: Deploy Agent with Memory Bank via deploy_agent.py ──────────────
 # agents-cli deploy does not support context_spec (required for Memory Bank).
 # deploy_agent.py uses vertexai.Client directly to pass ReasoningEngineContextSpec
 # with memory_bank_config, source_packages, and class_methods.
 echo ""
-echo ">>> Step 3/3: Deploying Agent with Memory Bank config..."
+echo ">>> Step 2/2: Deploying Agent with Memory Bank config..."
 cd "${SCRIPT_DIR}/demo-agent"
 
 uv run python deploy_agent.py
@@ -53,6 +44,20 @@ cd "${SCRIPT_DIR}"
 
 RE_ID=$(echo "${AGENT_RESOURCE_NAME}" | grep -oP 'reasoningEngines/\K[0-9]+')
 AGENT_URL="https://${REGION}-aiplatform.googleapis.com/v1beta1/${AGENT_RESOURCE_NAME}"
+
+# ─── Step 3 (optional): Register with Gemini Enterprise ─────────────────────
+if [ -n "${GEMINI_ENTERPRISE_APP_ID:-}" ]; then
+    echo ""
+    echo ">>> Registering with Gemini Enterprise..."
+    cd "${SCRIPT_DIR}/demo-agent"
+    agents-cli publish gemini-enterprise \
+        --gemini-enterprise-app-id "${GEMINI_ENTERPRISE_APP_ID}" \
+        --display-name "${GEMINI_DISPLAY_NAME:-${AGENT_DISPLAY_NAME:-sessions-memory-demo}}" \
+        --description "${GEMINI_DESCRIPTION:-Sessions and Memory Bank demo agent}" \
+        --no-confirm-project \
+        || echo "    GE registration failed (non-blocking)."
+    cd "${SCRIPT_DIR}"
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"

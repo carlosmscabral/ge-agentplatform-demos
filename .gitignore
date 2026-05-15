@@ -12,5 +12,12 @@ __pycache__/
 .adk/
 .google-agents-cli/
 
+# Generated dependencies (Rule #5)
+.requirements.txt
+
+# Deployment artifacts
+deployment_metadata.json
+
 # Secrets
 .env
+.mcp.json

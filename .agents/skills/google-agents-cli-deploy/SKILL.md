@@ -12,7 +12,7 @@ description: >
 metadata:
   author: Google
   license: Apache-2.0
-  version: 0.1.1
+  version: 0.1.3
   requires:
     bins:
       - agents-cli
@@ -114,7 +114,9 @@ agents-cli infra single-project
 | `--dry-run` / `-n` | Print what would be executed without running it | All |
 | `--no-confirm-project` | Skip project confirmation prompt | All |
 
-Run `agents-cli deploy --help` for the full flag reference. Cloud Run also accepts extra `gcloud` flags after `--` (e.g., `-- --timeout=600`).
+Run `agents-cli deploy --help` for the full flag reference.
+
+> **Advanced Cloud Run Deploys:** If you need features not exposed via `agents-cli` flags, use `--dry-run` (or `-n`) to print the full `gcloud` command, copy it, and add additional arguments as needed.
 
 > **Project Confirmation:** If the project is resolved automatically (not passed via `--project`), the command will prompt for confirmation in interactive mode. Since agents typically run in non-interactive mode, you MUST pass `--no-confirm-project` to proceed if you are relying on automatic project resolution.
 
@@ -175,6 +177,7 @@ Check `deployment/terraform/iam.tf` for exact role bindings. Cross-project permi
 - "Permission denied on Cloud Run" → `cicd_runner_sa` missing deployment role in the target project
 - "Cannot act as service account" → Missing `iam.serviceAccountUser` binding on `app_sa`
 - "Secret access denied" → `app_sa` missing `secretmanager.secretAccessor`
+- "Cloud SQL connection failed / Not authorized" → Runtime service account missing `roles/cloudsql.client`
 - "Artifact Registry read denied" → Cloud Run service agent missing read access in CI/CD project
 
 ---
@@ -220,6 +223,22 @@ agents-cli deploy --secrets "API_KEY=my-api-key,DB_PASS=db-password:2"
 ```
 
 Format: `ENV_VAR=SECRET_ID` or `ENV_VAR=SECRET_ID:VERSION` (defaults to latest). Access in code via `os.environ.get("API_KEY")`.
+
+---
+
+## Cloud SQL Permissions (Manual Deployment)
+
+When using Cloud SQL with Cloud Run in a **manual deployment** (e.g., adding `--add-cloudsql-instances` in non-Terraform setups), you must manually grant the `Cloud SQL Client` role to the runtime service account.
+
+Without this, the deployment may succeed but fail at runtime with `cloudsql.instances.get` authorization errors.
+
+```bash
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID \
+  --member="serviceAccount:YOUR_RUNTIME_SA_EMAIL" \
+  --role="roles/cloudsql.client"
+```
+
+> **Note:** In full Terraform-managed setups (`infra cicd` / `infra single-project`), this role is configured and managed automatically.
 
 ---
 
@@ -291,6 +310,7 @@ For custom infrastructure patterns, consult `references/terraform-patterns.md` f
 | Resource already exists | `terraform import` (see `references/terraform-patterns.md`) |
 | Agent Runtime deploy timeout / hangs | Deployments take 5-10 min; check if engine was created (see Agent Runtime Specifics) |
 | Secret not available | Verify `secretAccessor` granted to `app_sa` (not the default compute SA) |
+| Cloud SQL connection failed / 403 | Grant `roles/cloudsql.client` to the runtime service account when using manual deployments |
 | 403 on deploy | Check `deployment/terraform/iam.tf` — `cicd_runner_sa` needs deployment + SA impersonation roles in the target project |
 | 403 when testing Cloud Run | Default is `--no-allow-unauthenticated`; include `Authorization: Bearer $(gcloud auth print-identity-token)` header |
 | Cold starts too slow | Set `min_instance_count > 0` in Cloud Run Terraform config |

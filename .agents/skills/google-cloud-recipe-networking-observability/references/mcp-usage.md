@@ -13,7 +13,7 @@ data management and analysis.
 -   **list_dataset_ids**: List BigQuery dataset IDs in a project.
 -   **list_table_ids**: List table IDs in a BigQuery dataset.
 -   **get_table_info**: Get schema and metadata for a specific table.
--   **execute_sql**: Run `SELECT` queries to analyze logs (such as, VPC Flow,
+-   **execute_sql_readonly**: Run `SELECT` queries to analyze logs (such as, VPC Flow,
     Firewall) stored in BigQuery. This is the preferred tool for high-volume
     aggregations and trend analysis.
 

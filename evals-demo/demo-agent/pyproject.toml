@@ -37,8 +37,10 @@ pythonpath = "."
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.agents-cli]
-deployment_target = "agent_runtime"
 name = "evals-demo-agent"
 description = "Agent Platform evals demo"
-base_template = "adk"
 agent_directory = "app"
+
+[tool.agents-cli.create_params]
+deployment_target = "agent_runtime"
+base_template = "adk"

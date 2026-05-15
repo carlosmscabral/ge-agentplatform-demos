@@ -2,7 +2,7 @@
 
 Demonstrates **ADK Sessions** and **Memory Bank** on Google Cloud's Agent Platform — building agents that remember context across conversations.
 
-For a deep-dive into how everything works, see [LESSONS.md](LESSONS.md).
+For a deep-dive into how everything works, see [LESSONS.md](LESSONS.md). For detailed architecture diagrams and design decisions, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Architecture
 
@@ -97,6 +97,7 @@ See [LESSONS.md](LESSONS.md) for the full tutorial with diagrams and code exampl
 | `PROJECT_ID` | auto-detected | GCP project ID |
 | `REGION` | `us-central1` | GCP region |
 | `AGENT_DISPLAY_NAME` | `sessions-memory-demo` | Display name |
+| `STAGING_BUCKET` | `gs://<PROJECT_ID>-sessions-demo-staging` | GCS staging bucket |
 | `GEMINI_MODEL` | `gemini-3-flash-preview` | Gemini model |
 
 ## Known Limitations

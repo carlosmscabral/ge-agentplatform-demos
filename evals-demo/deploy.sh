@@ -10,7 +10,7 @@ fi
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
-STAGING_BUCKET="${PROJECT_ID}-evals-staging"
+STAGING_BUCKET="${STAGING_BUCKET:-${PROJECT_ID}-evals-staging}"
 GEMINI_MODEL="${GEMINI_MODEL:-gemini-3-flash-preview}"
 
 export PROJECT_ID REGION
@@ -43,6 +43,20 @@ agents-cli deploy \
     --no-confirm-project
 
 cd "${SCRIPT_DIR}"
+
+# ─── Step 3 (optional): Register with Gemini Enterprise ─────────────────────
+if [ -n "${GEMINI_ENTERPRISE_APP_ID:-}" ]; then
+    echo ""
+    echo ">>> Registering with Gemini Enterprise..."
+    cd "${SCRIPT_DIR}/demo-agent"
+    agents-cli publish gemini-enterprise \
+        --gemini-enterprise-app-id "${GEMINI_ENTERPRISE_APP_ID}" \
+        --display-name "${GEMINI_DISPLAY_NAME:-${AGENT_DISPLAY_NAME:-evals-demo-agent}}" \
+        --description "${GEMINI_DESCRIPTION:-Online evaluation demo agent}" \
+        --no-confirm-project \
+        || echo "    GE registration failed (non-blocking)."
+    cd "${SCRIPT_DIR}"
+fi
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"

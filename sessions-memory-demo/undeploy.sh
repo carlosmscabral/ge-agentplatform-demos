@@ -19,8 +19,18 @@ echo "  Project:  ${PROJECT_ID}"
 echo "  Region:   ${REGION}"
 echo ""
 
-# ─── Step 1: Delete ADK Agent from Agent Runtime ──────────────────────────
-echo ">>> Step 1/2: Deleting ADK Agent from Agent Runtime..."
+# ─── Step 1 (optional): Deregister from Gemini Enterprise ──────────────────
+if [ -n "${GEMINI_ENTERPRISE_APP_ID:-}" ] && [ -n "${GE_AGENT_ID:-}" ]; then
+    echo ">>> Deregistering from Gemini Enterprise..."
+    ACCESS_TOKEN=$(gcloud auth print-access-token)
+    curl -s -X DELETE \
+        "https://global-discoveryengine.googleapis.com/v1alpha/${GEMINI_ENTERPRISE_APP_ID}/assistants/default_assistant/agents/${GE_AGENT_ID}" \
+        -H "Authorization: Bearer ${ACCESS_TOKEN}" || echo "    GE agent not found."
+    echo ""
+fi
+
+# ─── Step 2: Delete ADK Agent from Agent Runtime ──────────────────────────
+echo ">>> Deleting ADK Agent from Agent Runtime..."
 if [ -f "${SCRIPT_DIR}/demo-agent/deployment_metadata.json" ]; then
     AGENT_RESOURCE_NAME=$(python3 -c "import json; print(json.load(open('${SCRIPT_DIR}/demo-agent/deployment_metadata.json'))['remote_agent_runtime_id'])")
     RE_ID=$(echo "${AGENT_RESOURCE_NAME}" | grep -oP 'reasoningEngines/\K[0-9]+')
@@ -35,10 +45,10 @@ else
 fi
 
 # ─── Step 2: Staging Bucket Cleanup ──────────────────────────────────────
+STAGING_BUCKET="${STAGING_BUCKET:-gs://${PROJECT_ID}-sessions-demo-staging}"
 echo ""
 echo ">>> Step 2/2: Staging bucket cleanup..."
-echo "    To delete the staging bucket, run:"
-echo "    gcloud storage rm --recursive \"${STAGING_BUCKET:-gs://${PROJECT_ID}-sessions-demo-staging}\" || true"
+gcloud storage rm --recursive "${STAGING_BUCKET}" --quiet 2>/dev/null || echo "    Bucket not found or already deleted."
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"

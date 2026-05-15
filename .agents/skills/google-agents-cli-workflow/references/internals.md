@@ -8,7 +8,7 @@ by the CLI — for debugging, customization, or edge cases — use these directl
 | `agents-cli` command | Underlying command |
 |---|---|
 | `agents-cli playground` | `uv run adk web .` |
-| `agents-cli run "prompt"` | `uv run adk api_server .` (background), then HTTP queries to `/run_sse` |
+| `agents-cli run "prompt"` | Starts a local server, queries it, then shuts it down (unless using --start-server) |
 | `agents-cli run --url URL --mode MODE "prompt"` | HTTP requests to URL (`/run_sse` for adk, A2A protocol for a2a) |
 | `agents-cli playground --port PORT` | `uv run adk web . --port PORT` |
 | `agents-cli lint` | `uv run ruff check . && uv run ruff format . --check` |

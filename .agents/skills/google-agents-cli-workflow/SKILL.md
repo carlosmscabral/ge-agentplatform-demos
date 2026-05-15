@@ -12,7 +12,7 @@ description: >
 metadata:
   author: Google
   license: Apache-2.0
-  version: 0.1.1
+  version: 0.1.3
   requires:
     bins:
       - agents-cli
@@ -25,8 +25,8 @@ metadata:
 
 **agents-cli** is a CLI and skills toolkit for building, evaluating, and deploying agents on Google Cloud using the [Agent Development Kit (ADK)](https://adk.dev/). It works with any coding agent — Gemini CLI, Claude Code, Codex, or others. Install with `uvx google-agents-cli setup`.
 
-> Requires: google-agents-cli ~= 0.1.1
-> If version is behind, run: uv tool install "google-agents-cli~=0.1.1"
+> Requires: google-agents-cli ~= 0.1.3
+> If version is behind, run: uv tool install "google-agents-cli~=0.1.3"
 > Check version: agents-cli info
 > [Install uv](https://docs.astral.sh/uv/getting-started/installation/index.md) first if needed.
 
@@ -200,7 +200,7 @@ It contains the evalset schema, config format, and critical gotchas. Do NOT skip
 **`uv run pytest` vs `agents-cli eval run` — know the difference:**
 - **`uv run pytest`** — Tests *code correctness*: imports work, functions return expected types, API contracts hold. Does NOT test whether the agent behaves well.
 - **`agents-cli eval run`** — Tests *agent behavior*: response quality, tool usage, persona consistency, safety compliance. This is what validates your agent actually works.
-- **`agents-cli run "prompt"`** — Quick one-off smoke test during development. Use this for fast iteration, not pytest.
+- **`agents-cli run "prompt"`** — Quick one-off smoke test during development. If testing multiple prompts use the `--start-server` option to persist the local server, which reduces overhead for repeated calls and allows resuming local sessions via `--session-id`. Use this for fast iteration, not pytest.
 
 **NEVER write pytest tests that check LLM response content** (e.g., asserting pirate keywords appear, checking if the agent mentions allergies). LLM outputs are non-deterministic. Use eval with LLM-as-judge criteria instead.
 

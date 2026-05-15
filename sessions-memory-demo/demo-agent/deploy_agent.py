@@ -4,7 +4,7 @@ Uses vertexai.Client directly because agents-cli deploy does not support
 context_spec (required for Memory Bank topic configuration).
 
 Usage:
-    PROJECT_ID=vibe-cabral REGION=us-central1 uv run python deploy_agent.py
+    PROJECT_ID=<your-project> REGION=us-central1 uv run python deploy_agent.py
 """
 
 import json
@@ -14,7 +14,6 @@ import sys
 import vertexai
 from vertexai._genai.types import (
     AgentEngineConfig,
-    IdentityType,
     ReasoningEngineContextSpec,
 )
 
@@ -68,10 +67,9 @@ def deploy():
 
     config = AgentEngineConfig(
         displayName=display_name,
-        stagingBucket=f"gs://{project_id}-sessions-demo-staging",
+        stagingBucket=os.environ.get("STAGING_BUCKET", f"gs://{project_id}-sessions-demo-staging"),
         envVars=env_vars,
         agentFramework="google-adk",
-        identityType=IdentityType.AGENT_IDENTITY,
         contextSpec=context_spec,
         source_packages=["./app"],
         entrypoint_module="app.agent_runtime_app",
