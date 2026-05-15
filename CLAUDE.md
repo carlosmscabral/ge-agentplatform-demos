@@ -4,7 +4,7 @@ This file defines the production rules for all demos at the repository root. Dem
 
 ---
 
-## The 9 Rules
+## The 10 Rules
 
 ### Rule #1 — Full Parameterization
 
@@ -95,7 +95,31 @@ Every demo must have two documentation files:
 
 Once a demo is completed and standardized, it must be indexed in the root `README.md`.
 
-### Rule #9 — Optional Gemini Enterprise Registration
+### Rule #9 — Demo Guide
+
+Every demo must have a `DEMO.md` that walks a user through demonstrating the functionality step by step. This is the "show script" — what to run, what to say, what to observe.
+
+Structure:
+- **Prerequisites** — what must be deployed, any setup steps
+- **Access methods** — how to interact with the agent (list all available options):
+  - `agents-cli run --url <url> --mode adk "prompt"` (from local terminal)
+  - Console Playground (link with agent engine ID)
+  - Demo scripts (`uv run python ../scripts/<script>.py`)
+- **Demo scenarios** — numbered acts/sections, each with:
+  - Context: what this scenario demonstrates
+  - Sample prompts: exact copy-pasteable commands
+  - What to observe: expected agent behavior, which tools fire, what data appears
+- **Verification** — how to confirm things worked (traces, dashboard, logs)
+- **Cleanup** — how to reset demo state without full undeploy (e.g., clear sessions/memories)
+
+Guidelines:
+- Prompts and agent instructions can be in English or Portuguese-BR depending on the demo's target audience
+- Use `agents-cli run` as the primary interaction method (works from any terminal)
+- Include Console Playground links as an alternative for visual demos
+- Cover happy path, edge cases, and the "wow" moments that make the demo compelling
+- Keep each scenario focused — one concept per act
+
+### Rule #10 — Optional Gemini Enterprise Registration
 
 Agents can optionally be registered with a Gemini Enterprise (GE) App. This is controlled entirely by env vars — if they're not set, registration is silently skipped.
 
@@ -163,6 +187,7 @@ Each active demo follows this layout:
 ├── undeploy.sh                   # Full resource cleanup
 ├── README.md                     # Quick start guide
 ├── ARCHITECTURE.md               # Detailed architecture documentation
+├── DEMO.md                       # Step-by-step demo script with sample prompts
 └── demo-agent/
     ├── pyproject.toml             # Dependencies with version ranges
     └── app/
