@@ -72,6 +72,7 @@ done
 echo ""
 echo ">>> Step 3/7: Deploying Specialist Agent (A2A) with SPIFFE identity..."
 cd "${SCRIPT_DIR}/specialist-agent"
+uv lock --quiet 2>/dev/null || true
 
 agents-cli deploy \
     --project "${PROJECT_ID}" \
@@ -154,6 +155,7 @@ echo "  A2A card URL (fallback): ${SPECIALIST_A2A_CARD_URL}"
 echo ""
 echo ">>> Step 5/7: Deploying Orchestrator Agent with SPIFFE identity + registry discovery..."
 cd "${SCRIPT_DIR}/orchestrator-agent"
+uv lock --quiet 2>/dev/null || true
 
 ORCHESTRATOR_ENV_VARS="GEMINI_MODEL=${GEMINI_MODEL},GOOGLE_CLOUD_LOCATION=global,GOOGLE_CLOUD_REGION=${REGION},REGISTRY_LOCATION=${REGISTRY_LOCATION},LOGS_BUCKET_NAME=${STAGING_BUCKET},OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=EVENT_ONLY,OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental,ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false,GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=False"
 

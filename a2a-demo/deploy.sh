@@ -39,6 +39,7 @@ gcloud storage buckets create "gs://${STAGING_BUCKET}" \
 echo ""
 echo ">>> Step 2/4: Deploying Specialist Agent (A2A)..."
 cd "${SCRIPT_DIR}/specialist-agent"
+uv lock --quiet 2>/dev/null || true
 
 agents-cli deploy \
     --project "${PROJECT_ID}" \
@@ -82,6 +83,7 @@ fi
 echo ""
 echo ">>> Step 4/4: Deploying Orchestrator Agent with specialist URL..."
 cd "${SCRIPT_DIR}/orchestrator-agent"
+uv lock --quiet 2>/dev/null || true
 
 agents-cli deploy \
     --project "${PROJECT_ID}" \

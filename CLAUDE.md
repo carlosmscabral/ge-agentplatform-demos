@@ -71,6 +71,7 @@ Every demo has `deploy.sh` and `undeploy.sh` at the demo root.
 - **Idempotency**: `deploy.sh` → `undeploy.sh` → `deploy.sh` must succeed without leftover resources
 - Use `|| echo "already exists"` / `|| true` for idempotent resource creation/deletion
 - `deployment_metadata.json` is the state artifact — `deploy.sh` writes it, `undeploy.sh` reads and removes it
+- **`uv lock` before deploy**: `deploy.sh` must run `uv lock --quiet 2>/dev/null || true` before each `agents-cli deploy` call. `agents-cli` uses `uv export --locked` internally, which fails if `uv.lock` is stale after `pyproject.toml` changes. This single line prevents deploy failures caused by dependency changes.
 
 ### Rule #7 — Use AI Skills
 
