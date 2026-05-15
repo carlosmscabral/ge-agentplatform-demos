@@ -1,7 +1,7 @@
 [project]
-name = "orchestrator-agent"
+name = "spiffe-orchestrator"
 version = "0.1.0"
-description = ""
+description = "Orchestrator with registry-based discovery and SPIFFE identity"
 authors = [
     {name = "Your Name", email = "your@email.com"},
 ]

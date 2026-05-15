@@ -64,7 +64,7 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> dic
 
 
 root_agent = Agent(
-    name="currency_specialist",
+    name="spiffe_currency_specialist",
     model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
     description="Agente especialista em câmbio: consulta taxas e converte valores entre moedas.",
     instruction=(

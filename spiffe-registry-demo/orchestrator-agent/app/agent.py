@@ -67,7 +67,7 @@ def _discover_specialist() -> RemoteA2aAgent | None:
     if SPECIALIST_A2A_CARD_URL:
         logger.info("Using fallback URL: %s", SPECIALIST_A2A_CARD_URL)
         return RemoteA2aAgent(
-            name="currency_specialist",
+            name="spiffe_currency_specialist",
             description="Agente especialista em câmbio: consulta taxas e converte valores entre moedas.",
             agent_card=SPECIALIST_A2A_CARD_URL,
             use_legacy=False,
@@ -82,13 +82,13 @@ specialist = _discover_specialist()
 sub_agents = [specialist] if specialist else []
 
 root_agent = Agent(
-    name="orchestrator_agent",
+    name="spiffe_orchestrator_agent",
     model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
     instruction=(
         "Você é um agente orquestrador. Responda sempre em português brasileiro.\n\n"
         "Você coordena tarefas delegando para agentes especialistas:\n"
         "- Para questões de câmbio, conversão de moedas ou taxas de câmbio, "
-        "delegue para o currency_specialist.\n"
+        "delegue para o spiffe_currency_specialist.\n"
         "- Para outras perguntas, responda diretamente com seu conhecimento geral.\n\n"
         "Ao delegar, repasse a pergunta completa do usuário para o especialista.\n"
         "Quando receber a resposta do especialista, repasse ao usuário de forma clara."

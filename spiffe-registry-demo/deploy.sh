@@ -121,7 +121,7 @@ sleep 15
 REGISTRY_ENTRY=$(gcloud alpha agent-registry agents list \
     --location="${REGISTRY_LOCATION}" \
     --project="${PROJECT_ID}" \
-    --filter="displayName='currency_specialist' OR displayName='${SPECIALIST_DISPLAY_NAME}'" \
+    --filter="displayName='spiffe_currency_specialist' OR displayName='${SPECIALIST_DISPLAY_NAME}'" \
     --format="yaml" 2>/dev/null || echo "")
 
 if [ -n "${REGISTRY_ENTRY}" ]; then

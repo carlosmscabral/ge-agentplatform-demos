@@ -1,7 +1,7 @@
 [project]
-name = "specialist-agent"
+name = "spiffe-specialist"
 version = "0.1.0"
-description = ""
+description = "A2A currency specialist with SPIFFE identity"
 authors = [
     {name = "Your Name", email = "your@email.com"},
 ]
