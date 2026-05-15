@@ -25,7 +25,7 @@ For a deep-dive into how everything works, see [LESSONS.md](LESSONS.md). For det
                      └──────────────────────────────────────────────┘
 ```
 
-1. **ADK Agent**: Customer support agent for "Acme Cloud Services" with Python FunctionTools (no MCP server). Deployed to Agent Runtime with SPIFFE identity.
+1. **ADK Agent**: Agente de suporte ao cliente da "Acme Cloud Services" com Python FunctionTools (sem MCP server). Instruções e interação em português-BR.
 2. **VertexAiSessionService**: Managed persistent sessions — automatic on Agent Runtime. `user:` state persists across sessions.
 3. **Memory Bank**: Extracts semantic memories from conversations via `after_agent_callback`. Loads them into new sessions via `PreloadMemoryTool`.
 
