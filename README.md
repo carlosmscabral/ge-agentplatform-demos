@@ -11,6 +11,7 @@ Each demo is fully parameterized — clone, set your GCP project, and deploy.
 | [`sessions-memory-demo/`](sessions-memory-demo/) | Cross-session persistence with Memory Bank | ADK Sessions, Memory Bank topics, custom tools, `deploy_agent.py` (agents-cli gap: `context_spec`) |
 | [`evals-demo/`](evals-demo/) | Online evaluation and monitoring | `agents-cli deploy`, Gen AI Evaluation Service, online monitors, traffic generation |
 | [`a2a-demo/`](a2a-demo/) | Agent-to-Agent protocol on Agent Runtime | A2A protocol, RemoteA2aAgent, agent cards, multi-agent sequential deploy |
+| [`spiffe-registry-demo/`](spiffe-registry-demo/) | SPIFFE identity + Agent Registry discovery | SPIFFE `--agent-identity`, auto-registration, `AgentRegistry.get_remote_a2a_agent()`, dynamic discovery |
 
 > Experimental demos and references are in [`experimental/`](experimental/) — see its README for details.
 
@@ -56,6 +57,8 @@ ge-agentplatform-demos/
 │   └── demo-agent/
 │
 ├── a2a-demo/                     A2A protocol demo (multi-agent)
+│
+├── spiffe-registry-demo/         SPIFFE identity + Agent Registry discovery
 │
 ├── evals-demo/                   Online evaluation demo
 │   ├── .env.template

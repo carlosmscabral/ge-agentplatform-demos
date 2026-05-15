@@ -120,6 +120,12 @@
       "sourceType": "github",
       "skillPath": "skills/cloud/google-cloud-waf-security/SKILL.md",
       "computedHash": "f043ada8752152cb3ce4fc903f665552406fefb18ef3c0178839275feb9fdd5c"
+    },
+    "agent-platform-debugger": {
+      "source": "GoogleCloudPlatform/cloud-networking-solutions",
+      "sourceType": "github",
+      "skillPath": "demos/agent-gateway/.agents/skills/agent-platform-debugger/SKILL.md",
+      "computedHash": "83cbdbdf5d7ac847e196f81e6bebd895aac5d384c0aa7068558109a5365d4159"
     }
   }
 }
