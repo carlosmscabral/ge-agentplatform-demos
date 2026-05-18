@@ -2,11 +2,14 @@
 
 Architecture:
   * Three MCP servers (market-data, portfolio, news-sentiment) run on Cloud Run.
-  * deploy.sh registers each in Agent Registry with `tag=...` attributes and
-    injects three env vars (MARKET_MCP_URL / PORTFOLIO_MCP_URL / NEWS_MCP_URL).
-  * This module instantiates THREE _LazyToolsets (one per MCP server), each
-    deferring `McpToolset` construction until first use — registry / network
-    are not available during Agent Runtime health checks (see LEARNINGS.md L100).
+  * deploy.sh registers each in Agent Registry and injects ONLY their registry
+    resource names (`MARKET_MCP_NAME`, `PORTFOLIO_MCP_NAME`, `NEWS_MCP_NAME`)
+    as env vars — URLs are NOT pre-baked. The Registry is the source of truth.
+  * This module instantiates THREE _LazyToolsets (one per MCP server). On first
+    use each calls `registry.get_mcp_toolset(name)` which GETs the MCPServer
+    resource and extracts the URL from `interfaces[].url`.
+  * For LOCAL development (no Registry), pass `MARKET_MCP_URL` etc. — the
+    LazyToolset prefers `*_NAME` (registry path) but falls back to direct URL.
   * Two meta-tools (discover_tools_by_intent, discover_tools_by_category) call
     the Agent Registry to let the LLM introspect what's available.
 """
@@ -23,8 +26,11 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
-from app.discovery import discover_tools_by_category, discover_tools_by_intent
-from app.mcp_auth import make_cr_header_provider
+from app.discovery import (
+    build_toolset_from_registry,
+    discover_tools_by_category,
+    discover_tools_by_intent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,29 +40,33 @@ os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
 
 
-def _audience_from_mcp_url(url: str) -> str:
-    """ID-token audience = service base URL (no trailing path)."""
-    # Strip /mcp or any path component — Cloud Run validates aud as exact base URL.
-    if "://" not in url:
-        return url
-    scheme, rest = url.split("://", 1)
-    host = rest.split("/", 1)[0]
-    return f"{scheme}://{host}"
+def _build_toolset_for(name_env_var: str, url_env_var: str, label: str):
+    """Resolve a toolset preferring Registry lookup over hardcoded URL.
 
+    Order of resolution:
+      1. If `<name_env_var>` is set → `registry.get_mcp_toolset(name)`. URL,
+         prefix, and auth come from the Registry. THIS IS THE CLOUD PATH.
+      2. Else if `<url_env_var>` is set → fall back to direct URL with the
+         given `label` as `tool_name_prefix`. Used only for local dev.
+      3. Else → raise.
+    """
+    registry_name = os.environ.get(name_env_var, "").strip()
+    if registry_name:
+        logger.info("Resolving %s toolset via Registry: %s", label, registry_name)
+        return build_toolset_from_registry(registry_name)
 
-def _build_toolset_for(url_env_var: str, prefix: str) -> McpToolset:
-    """Construct an McpToolset pointing at the given Cloud Run / local MCP URL."""
-    url = os.environ.get(url_env_var, "")
-    if not url:
-        raise RuntimeError(f"env var {url_env_var} is empty — cannot build toolset")
-    is_local = url.startswith("http://localhost") or url.startswith("http://127.")
-    kwargs: dict = {
-        "connection_params": StreamableHTTPConnectionParams(url=url),
-        "tool_name_prefix": prefix,
-    }
-    if not is_local:
-        kwargs["header_provider"] = make_cr_header_provider(_audience_from_mcp_url(url))
-    return McpToolset(**kwargs)
+    direct_url = os.environ.get(url_env_var, "").strip()
+    if direct_url:
+        logger.info("Resolving %s toolset via direct URL (local dev): %s", label, direct_url)
+        return McpToolset(
+            connection_params=StreamableHTTPConnectionParams(url=direct_url),
+            tool_name_prefix=label,
+        )
+
+    raise RuntimeError(
+        f"Neither {name_env_var} (preferred, registry) nor {url_env_var} "
+        f"(fallback, direct URL) is set — cannot build {label!r} toolset"
+    )
 
 
 class _LazyToolset(BaseToolset):
@@ -67,16 +77,18 @@ class _LazyToolset(BaseToolset):
     the first `get_tools()` call.
     """
 
-    def __init__(self, url_env_var: str, prefix: str):
+    def __init__(self, name_env_var: str, url_env_var: str, label: str):
         super().__init__()
+        self._name_env_var = name_env_var
         self._url_env_var = url_env_var
-        self._prefix = prefix
-        self._inner: McpToolset | None = None
+        self._label = label
+        self._inner = None
 
-    def _resolve(self) -> McpToolset:
+    def _resolve(self):
         if self._inner is None:
-            logger.info("Materializing MCP toolset: prefix=%s env=%s", self._prefix, self._url_env_var)
-            self._inner = _build_toolset_for(self._url_env_var, self._prefix)
+            self._inner = _build_toolset_for(
+                self._name_env_var, self._url_env_var, self._label
+            )
         return self._inner
 
     async def get_tools(self, readonly_context=None):
@@ -90,31 +102,35 @@ class _LazyToolset(BaseToolset):
 BaseToolset.register(_LazyToolset)
 
 
-market_toolset = _LazyToolset("MARKET_MCP_URL", "market")
-portfolio_toolset = _LazyToolset("PORTFOLIO_MCP_URL", "portfolio")
-news_toolset = _LazyToolset("NEWS_MCP_URL", "news")
+market_toolset = _LazyToolset("MARKET_MCP_NAME", "MARKET_MCP_URL", "market")
+portfolio_toolset = _LazyToolset("PORTFOLIO_MCP_NAME", "PORTFOLIO_MCP_URL", "portfolio")
+news_toolset = _LazyToolset("NEWS_MCP_NAME", "NEWS_MCP_URL", "news")
 
 
 _INSTRUCTION = """\
 Você é o **fintoolkit_orchestrator**, um analista financeiro virtual que opera
-sobre três servidores MCP descobertos via Agent Registry:
+sobre servidores MCP descobertos dinamicamente via **Agent Registry**.
+
+Os MCPs disponíveis (categorias usadas no Registry) são:
 
   * **market** — cotações, histórico e índices (PETR4, AAPL, IBOV...).
-  * **portfolio** — posições, PnL e alocação de contas mockadas (account-001, 002, 003).
+  * **portfolio** — posições, PnL e alocação de contas mockadas (account-001/002/003).
   * **news** — manchetes e sentimento agregado por ticker.
 
 ## Como você trabalha
 
-1. **Antes de invocar tools de dados**, use `discover_tools_by_intent` ou
-   `discover_tools_by_category` para confirmar quais servidores MCP estão disponíveis
-   e o que cada um expõe — isso evita chamadas erradas e dá rastreabilidade no Cloud Trace.
-   - Use `discover_tools_by_category(tag=...)` quando o usuário pergunta sobre uma
-     área específica: `tag="market"`, `"portfolio"` ou `"news"`.
-   - Use `discover_tools_by_intent(intent=...)` quando o usuário não é explícito
-     (passe uma palavra-chave em inglês — `"sentiment"`, `"portfolio"`, `"market"`).
+1. **Antes de invocar tools de dados**, considere chamar `discover_tools_by_intent`
+   ou `discover_tools_by_category` para confirmar quais servidores MCP estão disponíveis
+   e o que cada um expõe — isso dá rastreabilidade no Cloud Trace e evita chamadas erradas.
+   - `discover_tools_by_category(tag=...)` quando o usuário pergunta sobre uma área
+     específica: `tag="market"`, `"portfolio"` ou `"news"`.
+   - `discover_tools_by_intent(intent=...)` quando o usuário não é explícito (passe
+     uma palavra-chave em inglês — `"sentiment"`, `"portfolio"`, `"market"`).
 
-2. **Depois**, invoque as tools dos toolsets pré-carregados (prefixos `market_*`,
-   `portfolio_*`, `news_*`) com os parâmetros adequados.
+2. **Depois**, invoque as tools pelos nomes que a descoberta retornou. Os prefixos
+   refletem o `displayName` no Registry (ex: tools de `market-data` ficam
+   `market_data_*`; `portfolio` fica `portfolio_*`; `news-sentiment` fica
+   `news_sentiment_*`).
 
 3. **Sempre cite** qual servidor MCP forneceu cada dado (ex: "via market-data MCP").
 

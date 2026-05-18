@@ -225,6 +225,30 @@ This keeps the narrative ("the agent discovers its tools") truthful without
 fighting the framework. ARCHITECTURE: introspective discovery, not dynamic
 tool registration.
 
+### URL resolution: Strategy B (Registry-resolved)
+
+Each `_LazyToolset` reads a Registry resource name from env (e.g.
+`MARKET_MCP_NAME=projects/{P}/locations/{L}/mcpServers/agentregistry-…`) and
+calls `registry.get_mcp_toolset(name)` on first use. That call:
+
+1. GETs the `MCPServer` resource from Agent Registry
+2. Extracts `interfaces[].url` (the Cloud Run URL)
+3. Returns a configured `McpToolset`
+
+**Registry is the source of truth for URLs.** If a Cloud Run service URL
+changes (e.g., redeploy to a different region), the registry update is enough
+— no env-var change, no agent redeploy.
+
+For local development (no Registry entries for `localhost`), each LazyToolset
+also reads a fallback env var (`MARKET_MCP_URL=http://localhost:8081/mcp`). If
+the `*_NAME` is unset, the `*_URL` is used directly. This is the only place
+direct URLs appear.
+
+> **What we tried first** ("Strategy A"): pre-bake the 3 Cloud Run URLs into
+> env vars (`MARKET_MCP_URL=https://…run.app/mcp`). The Registry was only used
+> as introspection — discovery returned metadata, but toolsets bypassed it.
+> See [§8.11 Lessons Learned](#811-strategy-a-pre-baked-urls-was-decorative-registry-usage) for the rationale of switching.
+
 ---
 
 ## 4. Identity & IAM model
@@ -448,6 +472,30 @@ This file is in the demo-level `.gitignore` but not the scaffold's own
 
 **Fix**: `deploy.sh` cleans it up if present; updated the demo's `.gitignore`
 to use `**/deployment_metadata.json` to catch nested instances.
+
+### 8.11 Strategy A (pre-baked URLs) was decorative Registry usage
+
+**The mistake**: First version of `deploy.sh` passed Cloud Run URLs as env
+vars (`MARKET_MCP_URL=https://…run.app/mcp` etc.) to the orchestrator. The
+agent's `_LazyToolset` then constructed `McpToolset(StreamableHTTPConnectionParams(url=...))`
+manually from those env vars.
+
+**The problem**: Agent Registry was decorative — `discover_tools_by_*` returned
+server metadata, but the LLM invoked toolsets that had been pre-cabled by
+deploy.sh. If a URL changed in the Registry, the agent didn't notice. The
+whole "Registry as source of truth for MCP discovery" pitch was unrealized.
+
+**Fix (Strategy B)**: deploy.sh now passes the **Registry resource names**
+(e.g., `MARKET_MCP_NAME=projects/…/mcpServers/agentregistry-…`), not URLs. The
+`_LazyToolset` calls `registry.get_mcp_toolset(name)` on first use, which GETs
+the MCPServer resource and extracts the URL from `interfaces[].url`. Registry
+becomes load-bearing. Direct URLs are kept only as a local-dev fallback when
+the `*_NAME` env is unset.
+
+Code change scope: ~30 lines across `deploy.sh` (Step 6 env vars), `agent.py`
+(LazyToolset signature), and `discovery.py` (new `build_toolset_from_registry`
+helper that wraps `registry.get_mcp_toolset`). No MCP server changes; no
+behavior change for `discover_tools_by_*`.
 
 ### 8.10 toolspec custom fields are silently stripped — `Annotations.title` is the only writable per-tool string
 

@@ -89,7 +89,7 @@ Each of the 3 Cloud Run MCP services is also granted `allUsers:roles/run.invoker
 | `STAGING_BUCKET` | `${PROJECT_ID}-mcp-discovery-staging` | GCS bucket for logs + agent staging |
 | `GEMINI_MODEL` | `gemini-3-flash-preview` | Model used by the orchestrator |
 | `MARKET_MCP_SERVICE` / `PORTFOLIO_MCP_SERVICE` / `NEWS_MCP_SERVICE` | `fintoolkit-*-mcp` | Cloud Run service names |
-| `MARKET_MCP_URL` / `PORTFOLIO_MCP_URL` / `NEWS_MCP_URL` | localhost:808x | Used by `local_test.py` and local `agents-cli run` |
+| `MARKET_MCP_URL` / `PORTFOLIO_MCP_URL` / `NEWS_MCP_URL` | localhost:808x | **Local-dev fallback**. Cloud deploys use Registry-resolved URLs (the agent calls `registry.get_mcp_toolset(name)` — see [`ARCHITECTURE.md` §3](./ARCHITECTURE.md)) |
 
 ## Local testing (no cloud)
 

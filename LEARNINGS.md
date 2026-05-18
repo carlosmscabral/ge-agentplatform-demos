@@ -102,6 +102,18 @@ A `_LazyToolset` wrapper is also required to defer the `get_mcp_toolset()` call 
 ### URL uniqueness constraint
 Agent Registry enforces URL uniqueness across services. If a URL is already registered by another service, `services create` will fail with `Interface URL is already in use by another service`. Delete the old service first.
 
+### Discovery pattern: resolve URLs from Registry, don't bake them into env vars
+The natural temptation when wiring an agent to N MCP servers is to inject their URLs as env vars at deploy time (e.g., `MARKET_MCP_URL=https://…run.app/mcp`). This works, but Agent Registry becomes decorative — the agent could function without it.
+
+The load-bearing alternative: inject only the **mcpServer resource names** (e.g., `MARKET_MCP_NAME=projects/{P}/locations/{L}/mcpServers/agentregistry-…`) and have the agent call `registry.get_mcp_toolset(name)` at runtime. That call GETs the `MCPServer` resource and extracts the URL from `interfaces[].url`.
+
+Benefits:
+- Registry is the single source of truth — change a URL in Registry, agent picks it up at next toolset materialization. No env-var change, no agent redeploy.
+- Auth is auto-resolved: `get_mcp_toolset` reads `bindings` and wires `GcpAuthProviderScheme` for IAP-protected MCPs, OR sends no auth for public Cloud Run.
+- The "MCP discovery" story is genuine — not just introspection.
+
+Implementation: `_LazyToolset` reads `<NAME>` first, falls back to `<URL>` for local dev (no Registry entries for `localhost`). Pattern in `mcp-discovery-demo/orchestrator-agent/app/agent.py`. Documented in that demo's `ARCHITECTURE.md` §8.11.
+
 ### No user-writable tags/labels/attributes on MCPServer/Service
 Verified against `https://agentregistry.googleapis.com/$discovery/rest?version=v1alpha`:
 

@@ -90,6 +90,31 @@ def _list_all() -> list[dict[str, Any]]:
     return [_normalize(s) for s in resp.get("mcpServers", [])]
 
 
+def build_toolset_from_registry(mcp_server_name: str):
+    """Materialize an McpToolset by resolving its URL from Agent Registry.
+
+    This is the load-bearing call that makes Registry the source of truth for
+    runtime tool resolution — instead of baking URLs into env vars at deploy
+    time. `registry.get_mcp_toolset` GETs the MCPServer resource, reads the
+    `interfaces[].url` field, and returns a configured `McpToolset`.
+
+    The tool name prefix is derived from the MCPServer's `displayName` by the
+    registry (e.g. `market-data` → tools like `market_data_get_stock_quote`).
+    We don't override it — the prefix should match the discovery output so the
+    LLM can correlate "this is from MCP X" with the tool names it sees.
+
+    For non-Google-API URLs (e.g. Cloud Run `*.run.app`), the toolset's auto
+    header provider does NOT inject Google auth — so this is safe with public
+    Cloud Run MCPs (--allow-unauthenticated). For private endpoints behind
+    Agent Gateway, the registry's `bindings` field auto-resolves the auth
+    scheme to `GcpAuthProviderScheme`.
+    """
+    reg = _registry()
+    if reg is None:
+        raise RuntimeError("AgentRegistry unavailable — cannot resolve MCP server")
+    return reg.get_mcp_toolset(mcp_server_name)
+
+
 def discover_tools_by_intent(intent: str) -> dict[str, Any]:
     """Return MCP servers whose displayName or description contains the intent keyword.
 
