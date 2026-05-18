@@ -57,15 +57,20 @@ def _registry():
 
 
 def _normalize(server: dict[str, Any]) -> dict[str, Any]:
-    """Flatten the registry MCPServer schema into something the LLM can read."""
+    """Flatten the registry MCPServer schema into something the LLM can read.
+
+    The Registry API returns tools at the TOP level of the MCPServer resource
+    (read-only, populated from the toolspec content provided at create time).
+    Don't look inside `mcpServerSpec.toolSpec.tools` — that field is the create
+    envelope and isn't echoed back.
+    """
     interfaces = server.get("interfaces", []) or []
     url = interfaces[0].get("url", "") if interfaces else ""
-    spec = server.get("mcpServerSpec", {}) or {}
-    raw_tools = spec.get("toolSpec", {}).get("tools", []) or []
+    raw_tools = server.get("tools", []) or []
     tools = [{"name": t.get("name"), "description": t.get("description", "")} for t in raw_tools]
     description = server.get("description", "")
-    # Attributes come either from a structured field (future-proof) or from `[key:value]`
-    # markers in the description (current workaround — see _parse_attributes docstring).
+    # Attributes: parse `[key:value]` markers from description (Registry's own
+    # `attributes` field is system-reserved — see _parse_attributes docstring).
     attrs = dict(server.get("attributes", {}) or {})
     attrs.update(_parse_attributes(description))
     return {
@@ -116,24 +121,49 @@ def build_toolset_from_registry(mcp_server_name: str):
 
 
 def discover_tools_by_intent(intent: str) -> dict[str, Any]:
-    """Return MCP servers whose displayName or description contains the intent keyword.
+    """Return MCP servers whose displayName, description, or any tool's name /
+    description contains the intent keyword (case-insensitive substring).
+
+    Unlike the Registry's native `searchMcpServers` (which only knows about
+    `mcpServerId | name | displayName` — verified against the v1alpha discovery
+    doc), this function ALSO searches the tools inside each MCP, so an intent
+    like "quote" finds `market-data` (whose tool `get_stock_quote` matches),
+    and "sentiment" finds `news-sentiment` (its `get_sentiment_score` tool).
+
+    Each match includes a `matched_in` field listing where the keyword hit
+    (`display_name`, `description`, `tool:<name>:name`, `tool:<name>:description`),
+    so the LLM can explain its choice.
 
     Args:
         intent: Free-text keyword extracted from the user's question
-                (e.g. "sentiment", "portfolio", "cotação", "news").
+                (e.g. "sentiment", "quote", "allocation", "news").
     Returns:
-        Dict with 'criterion', 'query', 'matches' (list of server dicts). Empty
-        'matches' means no server matched — the agent should ask the user to rephrase
-        or fall back to pre-loaded toolsets.
+        Dict with `criterion`, `query`, `matches` (server dicts with extra
+        `matched_in` field), `count`.
     """
     q = (intent or "").strip().lower()
     if not q:
         return {"criterion": "intent", "query": intent, "matches": [], "error": "empty intent"}
-    matches = [
-        s
-        for s in _list_all()
-        if q in s["display_name"].lower() or q in s["description"].lower()
-    ]
+
+    matches: list[dict[str, Any]] = []
+    for server in _list_all():
+        hits: list[str] = []
+        if q in (server.get("display_name") or "").lower():
+            hits.append("display_name")
+        if q in (server.get("description") or "").lower():
+            hits.append("description")
+        for tool in server.get("tools", []) or []:
+            tname = (tool.get("name") or "").lower()
+            tdesc = (tool.get("description") or "").lower()
+            if q in tname:
+                hits.append(f"tool:{tool.get('name')}:name")
+            if q in tdesc:
+                hits.append(f"tool:{tool.get('name')}:description")
+        if hits:
+            enriched = dict(server)
+            enriched["matched_in"] = hits
+            matches.append(enriched)
+
     return {"criterion": "intent", "query": intent, "matches": matches, "count": len(matches)}
 
 

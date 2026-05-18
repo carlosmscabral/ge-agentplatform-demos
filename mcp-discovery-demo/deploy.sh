@@ -216,6 +216,15 @@ ORCH_ENV_VARS="${ORCH_ENV_VARS},MARKET_MCP_NAME=${MCP_REGISTRY_NAME[${MARKET_MCP
 ORCH_ENV_VARS="${ORCH_ENV_VARS},PORTFOLIO_MCP_NAME=${MCP_REGISTRY_NAME[${PORTFOLIO_MCP_SERVICE}]}"
 ORCH_ENV_VARS="${ORCH_ENV_VARS},NEWS_MCP_NAME=${MCP_REGISTRY_NAME[${NEWS_MCP_SERVICE}]}"
 
+# `agents-cli deploy` spawns a local subprocess that imports `app.agent` to
+# introspect the runtime BEFORE uploading. With eager toolset construction
+# (this demo's simplification — see ARCHITECTURE.md §2c) the import requires
+# the *_MCP_NAME env vars. We export them locally so the introspector sees
+# them; --update-env-vars sets the runtime values for the deployed agent.
+export MARKET_MCP_NAME="${MCP_REGISTRY_NAME[${MARKET_MCP_SERVICE}]}"
+export PORTFOLIO_MCP_NAME="${MCP_REGISTRY_NAME[${PORTFOLIO_MCP_SERVICE}]}"
+export NEWS_MCP_NAME="${MCP_REGISTRY_NAME[${NEWS_MCP_SERVICE}]}"
+
 agents-cli deploy \
     --project "${PROJECT_ID}" \
     --region "${REGION}" \

@@ -5,13 +5,20 @@ Architecture:
   * deploy.sh registers each in Agent Registry and injects ONLY their registry
     resource names (`MARKET_MCP_NAME`, `PORTFOLIO_MCP_NAME`, `NEWS_MCP_NAME`)
     as env vars — URLs are NOT pre-baked. The Registry is the source of truth.
-  * This module instantiates THREE _LazyToolsets (one per MCP server). On first
-    use each calls `registry.get_mcp_toolset(name)` which GETs the MCPServer
-    resource and extracts the URL from `interfaces[].url`.
-  * For LOCAL development (no Registry), pass `MARKET_MCP_URL` etc. — the
-    LazyToolset prefers `*_NAME` (registry path) but falls back to direct URL.
+  * At module import time we resolve each toolset by calling
+    `registry.get_mcp_toolset(name)`, which GETs the MCPServer resource and
+    extracts `interfaces[].url`. The MCP server itself is contacted lazily by
+    ADK on the first `get_tools()` call.
+  * For LOCAL development (no Registry entries for localhost), each `*_MCP_URL`
+    env var is used as a fallback when `*_MCP_NAME` is unset.
   * Two meta-tools (discover_tools_by_intent, discover_tools_by_category) call
     the Agent Registry to let the LLM introspect what's available.
+
+Design note: we deliberately do NOT use a `_LazyToolset` wrapper here. That
+wrapper is a useful production pattern when service availability at import
+time is uncertain (deploy health checks, transient failures); this demo
+favors simplicity and assumes Registry + MCP services are healthy. If you
+need that resilience pattern, see `experimental/governance-demo/`.
 """
 
 from __future__ import annotations
@@ -22,7 +29,6 @@ import os
 import google.auth
 from google.adk.agents import Agent
 from google.adk.apps import App
-from google.adk.tools.base_toolset import BaseToolset
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
@@ -40,15 +46,14 @@ os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
 
 
-def _build_toolset_for(name_env_var: str, url_env_var: str, label: str):
+def _build_toolset(name_env_var: str, url_env_var: str, label: str) -> McpToolset:
     """Resolve a toolset preferring Registry lookup over hardcoded URL.
 
-    Order of resolution:
-      1. If `<name_env_var>` is set → `registry.get_mcp_toolset(name)`. URL,
-         prefix, and auth come from the Registry. THIS IS THE CLOUD PATH.
-      2. Else if `<url_env_var>` is set → fall back to direct URL with the
-         given `label` as `tool_name_prefix`. Used only for local dev.
-      3. Else → raise.
+    1. If `<name_env_var>` is set → `registry.get_mcp_toolset(name)`. URL,
+       prefix, and auth come from the Registry. Cloud path.
+    2. Else if `<url_env_var>` is set → direct URL with `label` as
+       `tool_name_prefix`. Local-dev path.
+    3. Else → raise.
     """
     registry_name = os.environ.get(name_env_var, "").strip()
     if registry_name:
@@ -69,42 +74,9 @@ def _build_toolset_for(name_env_var: str, url_env_var: str, label: str):
     )
 
 
-class _LazyToolset(BaseToolset):
-    """Defers MCP toolset construction until first use (LEARNINGS.md L100).
-
-    Agent Runtime imports this module during health checks. At import time the
-    registry / Cloud Run services may not be reachable yet, so we hold off until
-    the first `get_tools()` call.
-    """
-
-    def __init__(self, name_env_var: str, url_env_var: str, label: str):
-        super().__init__()
-        self._name_env_var = name_env_var
-        self._url_env_var = url_env_var
-        self._label = label
-        self._inner = None
-
-    def _resolve(self):
-        if self._inner is None:
-            self._inner = _build_toolset_for(
-                self._name_env_var, self._url_env_var, self._label
-            )
-        return self._inner
-
-    async def get_tools(self, readonly_context=None):
-        return await self._resolve().get_tools(readonly_context)
-
-    async def close(self):
-        if self._inner is not None:
-            await self._inner.close()
-
-
-BaseToolset.register(_LazyToolset)
-
-
-market_toolset = _LazyToolset("MARKET_MCP_NAME", "MARKET_MCP_URL", "market")
-portfolio_toolset = _LazyToolset("PORTFOLIO_MCP_NAME", "PORTFOLIO_MCP_URL", "portfolio")
-news_toolset = _LazyToolset("NEWS_MCP_NAME", "NEWS_MCP_URL", "news")
+market_toolset = _build_toolset("MARKET_MCP_NAME", "MARKET_MCP_URL", "market")
+portfolio_toolset = _build_toolset("PORTFOLIO_MCP_NAME", "PORTFOLIO_MCP_URL", "portfolio")
+news_toolset = _build_toolset("NEWS_MCP_NAME", "NEWS_MCP_URL", "news")
 
 
 _INSTRUCTION = """\

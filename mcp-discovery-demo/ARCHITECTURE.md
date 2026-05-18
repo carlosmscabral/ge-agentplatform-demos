@@ -117,25 +117,39 @@ default Compute Engine SA (sufficient for serving the MCP; it doesn't need
 elevated permissions because the MCP tools are stateless reads on in-memory
 mock data).
 
-### c) Lazy toolset materialization
+### c) Eager toolset construction (demo simplicity)
 
-[LEARNINGS.md](../LEARNINGS.md) line 100 documents that Agent Runtime imports
-the agent module during deploy-time health checks, when network calls to
-Agent Registry or Cloud Run may still be racing. Eager `McpToolset(...)`
-construction at module import time fails intermittently.
-
-`_LazyToolset` defers the inner `McpToolset` construction until the first
-`get_tools()` call:
+This demo builds the 3 `McpToolset` instances **eagerly** at module import
+time:
 
 ```python
-class _LazyToolset(BaseToolset):
-    def _resolve(self):
-        if self._inner is None:
-            self._inner = _build_toolset_for(self._url_env_var, self._prefix)
-        return self._inner
-    async def get_tools(self, readonly_context=None):
-        return await self._resolve().get_tools(readonly_context)
+market_toolset    = _build_toolset("MARKET_MCP_NAME", "MARKET_MCP_URL", "market")
+portfolio_toolset = _build_toolset("PORTFOLIO_MCP_NAME", "PORTFOLIO_MCP_URL", "portfolio")
+news_toolset      = _build_toolset("NEWS_MCP_NAME", "NEWS_MCP_URL", "news")
 ```
+
+Each `_build_toolset` resolves the Registry resource name via
+`registry.get_mcp_toolset(name)` — that GETs the MCPServer + bindings (2
+HTTP calls to Agent Registry per toolset) and returns the configured
+`McpToolset`. The actual MCP server (Cloud Run) is contacted lazily by ADK
+on the first `get_tools()`, so the only eager cost at import time is the
+Registry calls themselves.
+
+> **Trade-off vs. the `_LazyToolset` wrapper pattern.**
+>
+> [LEARNINGS.md](../LEARNINGS.md) documents `_LazyToolset` — a `BaseToolset`
+> subclass that defers `McpToolset` construction until the first
+> `get_tools()` call. That's the right call for production deployments where
+> Agent Runtime may import the module during deploy-time health checks
+> *before* the Registry or MCP services are reachable. It's used in
+> `experimental/governance-demo/`.
+>
+> For this demo we chose the simpler eager path because (a) the focus is the
+> discovery pattern, not deploy resilience, (b) the Registry has been
+> provisioned by the time Step 6 of `deploy.sh` runs, and (c) the eager
+> failure mode is louder and easier to debug ("deploy crashed at import"
+> beats "agent silently returns no tools"). For production, copy the
+> `_LazyToolset` from `experimental/governance-demo/demo-agent/app/agent.py`.
 
 ---
 
@@ -199,17 +213,24 @@ _LazyToolset._resolve() → McpToolset(StreamableHTTPConnectionParams(
 ### Why two discovery patterns, not one?
 
 The user asked for **two criteria** to demonstrate that discovery isn't a single
-hard-coded query. Each criterion exercises a different `list_mcp_servers` shape:
+hard-coded query. Each criterion exercises a different filter shape:
 
 | Pattern | Filter source | Best when |
 |---|---|---|
-| `discover_tools_by_intent(intent)` | substring on `displayName` + `description` | user phrasing is free-form |
-| `discover_tools_by_category(tag)` | `attributes.tag == <value>` | agent has narrowed the domain |
+| `discover_tools_by_intent(intent)` | substring on `displayName`, `description`, **and every tool's name + description** | user phrasing is free-form |
+| `discover_tools_by_category(tag)` | parsed `[tag:X]` markers in description (Registry has no writable `attributes`) | agent has narrowed the domain |
+
+The intent search returns a `matched_in` array on each result listing exactly
+where the keyword hit (e.g. `["display_name"]`, `["tool:get_stock_quote:name"]`,
+`["description", "tool:get_company_news:description"]`), so the LLM can explain
+its choice — and so future iterations can rank matches by which level matched.
 
 We deliberately **do not** call this "semantic search" — `AgentRegistry` does
-not have an embedding index. True semantic discovery would require Vertex AI
-Vector Search on top of registry metadata, which is out of scope for this demo.
-The substring approach is fast, deterministic, and zero-cost.
+not have an embedding index. The Registry's own `searchMcpServers` REST endpoint
+only knows `mcpServerId | name | displayName`; for matching against tool-level
+content we built the search client-side over the full `mcpServerSpec.toolSpec`.
+True semantic discovery would require Vertex AI Vector Search on top of
+registry metadata, which is out of scope for this demo.
 
 ### Why pre-load 3 toolsets AND expose discovery?
 

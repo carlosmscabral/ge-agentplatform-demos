@@ -12,10 +12,10 @@ _FAKE_REGISTRY_RESPONSE = {
             "displayName": "market-data",
             "description": "[tag:market] [domain:finance] Market data MCP server: quotes, history, indexes.",
             "interfaces": [{"url": "https://market.run.app/mcp"}],
-            "mcpServerSpec": {"toolSpec": {"tools": [
-                {"name": "get_stock_quote", "description": "Quote"},
-                {"name": "get_market_index", "description": "Index"},
-            ]}},
+            "tools": [
+                {"name": "get_stock_quote", "description": "Get latest quote for a ticker"},
+                {"name": "get_market_index", "description": "Index snapshot"},
+            ],
             "attributes": {},  # raw API doesn't return attributes; we parse from description
         },
         {
@@ -23,9 +23,9 @@ _FAKE_REGISTRY_RESPONSE = {
             "displayName": "portfolio",
             "description": "[tag:portfolio] [domain:finance] Portfolio MCP: holdings, PnL, allocation.",
             "interfaces": [{"url": "https://portfolio.run.app/mcp"}],
-            "mcpServerSpec": {"toolSpec": {"tools": [
-                {"name": "get_portfolio_holdings", "description": "Holdings"},
-            ]}},
+            "tools": [
+                {"name": "get_portfolio_holdings", "description": "Account holdings"},
+            ],
             "attributes": {},
         },
         {
@@ -33,9 +33,9 @@ _FAKE_REGISTRY_RESPONSE = {
             "displayName": "news-sentiment",
             "description": "[tag:news] [domain:finance] News + sentiment MCP server.",
             "interfaces": [{"url": "https://news.run.app/mcp"}],
-            "mcpServerSpec": {"toolSpec": {"tools": [
-                {"name": "get_sentiment_score", "description": "Sentiment"},
-            ]}},
+            "tools": [
+                {"name": "get_sentiment_score", "description": "Sentiment for a ticker"},
+            ],
             "attributes": {},
         },
     ]
@@ -53,18 +53,38 @@ def setup_function(_func):
     discovery._registry.cache_clear()
 
 
-def test_discover_by_intent_matches_substring():
+def test_discover_by_intent_matches_display_name():
     with patch.object(discovery, "_registry", return_value=_patched_registry()):
         r = discovery.discover_tools_by_intent("portfolio")
     assert r["count"] == 1
     assert r["matches"][0]["display_name"] == "portfolio"
+    assert "display_name" in r["matches"][0]["matched_in"]
 
 
-def test_discover_by_intent_matches_description_too():
+def test_discover_by_intent_matches_description():
     with patch.object(discovery, "_registry", return_value=_patched_registry()):
         r = discovery.discover_tools_by_intent("quotes")  # only in market description
     assert r["count"] == 1
     assert r["matches"][0]["display_name"] == "market-data"
+    assert "description" in r["matches"][0]["matched_in"]
+
+
+def test_discover_by_intent_matches_tool_name():
+    # "stock_quote" only appears in market-data's `get_stock_quote` tool name
+    with patch.object(discovery, "_registry", return_value=_patched_registry()):
+        r = discovery.discover_tools_by_intent("stock_quote")
+    assert r["count"] == 1
+    assert r["matches"][0]["display_name"] == "market-data"
+    assert any(m.startswith("tool:get_stock_quote") for m in r["matches"][0]["matched_in"])
+
+
+def test_discover_by_intent_matches_tool_description():
+    # "Quote" appears in get_stock_quote's description, "Holdings" in get_portfolio_holdings
+    with patch.object(discovery, "_registry", return_value=_patched_registry()):
+        r = discovery.discover_tools_by_intent("holdings")
+    assert r["count"] == 1
+    assert r["matches"][0]["display_name"] == "portfolio"
+    assert any("tool:get_portfolio_holdings" in m for m in r["matches"][0]["matched_in"])
 
 
 def test_discover_by_intent_no_match_returns_empty():
