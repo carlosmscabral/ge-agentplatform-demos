@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app import discovery
 
 
@@ -115,3 +117,78 @@ def test_discover_falls_back_to_empty_when_registry_unavailable():
     with patch.object(discovery, "_registry", return_value=None):
         r = discovery.discover_tools_by_intent("market")
     assert r["matches"] == []
+
+
+# ─── invoke_mcp_tool ──────────────────────────────────────────────────────
+
+
+def _make_async_tool(name, return_value):
+    """Build a mock BaseTool-like object whose run_async returns the given value."""
+
+    async def _run(args, tool_context):
+        return return_value
+
+    t = MagicMock()
+    t.name = name
+    t.run_async = _run
+    return t
+
+
+@pytest.mark.asyncio
+async def test_invoke_mcp_tool_happy_path():
+    import pytest_asyncio  # noqa: F401 — ensure plugin available
+
+    # Mock the materialized toolset to return a fake tool list
+    fake_tool = _make_async_tool("get_stock_quote", {"ticker": "AAPL", "price": 245.30})
+    fake_toolset = MagicMock()
+
+    async def _get_tools(*_args, **_kw):
+        return [fake_tool]
+
+    fake_toolset.get_tools = _get_tools
+
+    # Patch the cache so _materialize_toolset short-circuits
+    discovery._TOOLSET_CACHE.clear()
+    discovery._TOOLSET_CACHE["projects/p/.../mcpServers/agentregistry-aaaa"] = fake_toolset
+
+    result = await discovery.invoke_mcp_tool(
+        mcp_server_name="projects/p/.../mcpServers/agentregistry-aaaa",
+        tool_name="get_stock_quote",
+        arguments={"ticker": "AAPL"},
+    )
+    assert result == {"result": {"ticker": "AAPL", "price": 245.30}}
+
+
+@pytest.mark.asyncio
+async def test_invoke_mcp_tool_unknown_tool_returns_error_with_available_list():
+    fake_tool = _make_async_tool("get_stock_quote", {})
+    fake_toolset = MagicMock()
+
+    async def _get_tools(*_args, **_kw):
+        return [fake_tool]
+
+    fake_toolset.get_tools = _get_tools
+
+    discovery._TOOLSET_CACHE.clear()
+    discovery._TOOLSET_CACHE["mcpServers/x"] = fake_toolset
+
+    result = await discovery.invoke_mcp_tool(
+        mcp_server_name="mcpServers/x",
+        tool_name="get_nonexistent",
+        arguments={},
+    )
+    assert "error" in result
+    assert result["available_tools"] == ["get_stock_quote"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_mcp_tool_registry_unavailable():
+    discovery._TOOLSET_CACHE.clear()
+    with patch.object(discovery, "_registry", return_value=None):
+        r = await discovery.invoke_mcp_tool(
+            mcp_server_name="mcpServers/missing",
+            tool_name="anything",
+            arguments={},
+        )
+    assert "error" in r
+    assert "failed to resolve MCP server" in r["error"]

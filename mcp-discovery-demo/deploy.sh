@@ -208,22 +208,10 @@ ORCH_ENV_VARS="${ORCH_ENV_VARS},OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTE
 ORCH_ENV_VARS="${ORCH_ENV_VARS},OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental"
 ORCH_ENV_VARS="${ORCH_ENV_VARS},ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS=false"
 ORCH_ENV_VARS="${ORCH_ENV_VARS},GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=False"
-# Strategy B (Registry-resolved URLs): pass the Agent Registry mcpServer resource
-# names; the orchestrator calls `registry.get_mcp_toolset(name)` at runtime to
-# fetch the URL from the Registry. The Registry is the source of truth — URLs
-# are NOT pre-baked into env vars (Strategy A, deprecated).
-ORCH_ENV_VARS="${ORCH_ENV_VARS},MARKET_MCP_NAME=${MCP_REGISTRY_NAME[${MARKET_MCP_SERVICE}]}"
-ORCH_ENV_VARS="${ORCH_ENV_VARS},PORTFOLIO_MCP_NAME=${MCP_REGISTRY_NAME[${PORTFOLIO_MCP_SERVICE}]}"
-ORCH_ENV_VARS="${ORCH_ENV_VARS},NEWS_MCP_NAME=${MCP_REGISTRY_NAME[${NEWS_MCP_SERVICE}]}"
-
-# `agents-cli deploy` spawns a local subprocess that imports `app.agent` to
-# introspect the runtime BEFORE uploading. With eager toolset construction
-# (this demo's simplification — see ARCHITECTURE.md §2c) the import requires
-# the *_MCP_NAME env vars. We export them locally so the introspector sees
-# them; --update-env-vars sets the runtime values for the deployed agent.
-export MARKET_MCP_NAME="${MCP_REGISTRY_NAME[${MARKET_MCP_SERVICE}]}"
-export PORTFOLIO_MCP_NAME="${MCP_REGISTRY_NAME[${PORTFOLIO_MCP_SERVICE}]}"
-export NEWS_MCP_NAME="${MCP_REGISTRY_NAME[${NEWS_MCP_SERVICE}]}"
+# Option B: agent has ZERO knowledge of specific MCPs at deploy time. It only
+# needs Registry access (granted via SPIFFE principalSet + agentregistry.viewer).
+# Discovery + dynamic invocation happens entirely at runtime via the Registry.
+# See ARCHITECTURE.md §3.
 
 agents-cli deploy \
     --project "${PROJECT_ID}" \

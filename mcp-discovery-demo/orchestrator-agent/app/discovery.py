@@ -95,29 +95,88 @@ def _list_all() -> list[dict[str, Any]]:
     return [_normalize(s) for s in resp.get("mcpServers", [])]
 
 
-def build_toolset_from_registry(mcp_server_name: str):
-    """Materialize an McpToolset by resolving its URL from Agent Registry.
+_TOOLSET_CACHE: dict[str, Any] = {}
 
-    This is the load-bearing call that makes Registry the source of truth for
-    runtime tool resolution — instead of baking URLs into env vars at deploy
-    time. `registry.get_mcp_toolset` GETs the MCPServer resource, reads the
-    `interfaces[].url` field, and returns a configured `McpToolset`.
 
-    The tool name prefix is derived from the MCPServer's `displayName` by the
-    registry (e.g. `market-data` → tools like `market_data_get_stock_quote`).
-    We don't override it — the prefix should match the discovery output so the
-    LLM can correlate "this is from MCP X" with the tool names it sees.
+def _materialize_toolset(mcp_server_name: str):
+    """Materialize a *no-prefix* McpToolset for a Registry MCPServer (cached).
 
-    For non-Google-API URLs (e.g. Cloud Run `*.run.app`), the toolset's auto
-    header provider does NOT inject Google auth — so this is safe with public
-    Cloud Run MCPs (--allow-unauthenticated). For private endpoints behind
-    Agent Gateway, the registry's `bindings` field auto-resolves the auth
-    scheme to `GcpAuthProviderScheme`.
+    We deliberately bypass `registry.get_mcp_toolset()` because that helper
+    auto-applies a tool-name prefix derived from `displayName` (e.g.,
+    `market-data` → tools become `market_data_get_stock_quote`). For the
+    dynamic-invoker pattern we want tool names to match exactly what discovery
+    returned (bare `get_stock_quote`), so the LLM can pass them through
+    unchanged. We resolve the URL ourselves and build the toolset directly.
     """
+    if mcp_server_name in _TOOLSET_CACHE:
+        return _TOOLSET_CACHE[mcp_server_name]
+
+    from google.adk.tools.mcp_tool import McpToolset
+    from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
+
     reg = _registry()
     if reg is None:
         raise RuntimeError("AgentRegistry unavailable — cannot resolve MCP server")
-    return reg.get_mcp_toolset(mcp_server_name)
+    server_details = reg.get_mcp_server(mcp_server_name)
+    interfaces = server_details.get("interfaces", []) or []
+    url = interfaces[0].get("url", "") if interfaces else ""
+    if not url:
+        raise RuntimeError(f"MCPServer {mcp_server_name} has no usable interfaces[].url")
+
+    toolset = McpToolset(
+        connection_params=StreamableHTTPConnectionParams(url=url),
+        tool_name_prefix=None,  # keep tool names verbatim
+    )
+    _TOOLSET_CACHE[mcp_server_name] = toolset
+    logger.info("Materialized + cached toolset for %s → %s", mcp_server_name, url)
+    return toolset
+
+
+async def invoke_mcp_tool(
+    mcp_server_name: str,
+    tool_name: str,
+    arguments: dict[str, Any] | None = None,
+    *,
+    tool_context: Any = None,
+) -> dict[str, Any]:
+    """Invoke a tool on an MCP server resolved via Agent Registry.
+
+    Use this AFTER `discover_tools_by_intent` or `discover_tools_by_category`
+    has told you which MCP server (by its `name` field) and which `tool`
+    (by name) to invoke.
+
+    Args:
+        mcp_server_name: The full Registry resource name returned by discovery,
+                         e.g. `projects/{P}/locations/{L}/mcpServers/agentregistry-…`.
+        tool_name: The tool's `name` as returned by discovery (e.g. `get_stock_quote`).
+        arguments: Dict of arguments to pass to the tool. Schemas vary per tool —
+                   match the discovery output. Pass `{}` or omit if no args.
+    Returns:
+        The tool's response (typically a dict). On failure, returns
+        `{"error": "..."}` with a human-readable explanation.
+    """
+    try:
+        toolset = _materialize_toolset(mcp_server_name)
+    except Exception as e:
+        return {"error": f"failed to resolve MCP server '{mcp_server_name}': {e}"}
+
+    try:
+        tools = await toolset.get_tools()
+    except Exception as e:
+        return {"error": f"failed to list tools on MCP server: {e}"}
+
+    target = next((t for t in tools if t.name == tool_name), None)
+    if target is None:
+        return {
+            "error": f"tool '{tool_name}' not found on MCP server",
+            "available_tools": [t.name for t in tools],
+        }
+
+    try:
+        result = await target.run_async(args=arguments or {}, tool_context=tool_context)
+        return {"result": result}
+    except Exception as e:
+        return {"error": f"tool invocation failed: {e}"}
 
 
 def discover_tools_by_intent(intent: str) -> dict[str, Any]:

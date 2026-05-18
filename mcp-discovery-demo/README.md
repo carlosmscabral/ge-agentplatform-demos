@@ -125,20 +125,21 @@ mcp-discovery-demo/
 
 ## Further reading
 
-* [`ARCHITECTURE.md`](./ARCHITECTURE.md) — diagrams of the discovery flow, IAM model, request path, **§8 Lessons Learned** (10 documented missteps and fixes from building this demo)
-* [`DEMO.md`](./DEMO.md) — 4-act PT-BR walkthrough with copy-pasteable prompts
-* Repo-level [`LEARNINGS.md`](../LEARNINGS.md) — hard-won knowledge on Agent Registry, SPIFFE, MCP on Cloud Run (updated with this demo's findings)
-* Repo-level [`CLAUDE.md`](../CLAUDE.md) — the 11 production rules followed by this demo
+* [`ARCHITECTURE.md`](./ARCHITECTURE.md) — guia técnico em PT-BR da implementação atual (Option B): diagramas de discovery, IAM, fluxo end-to-end, registro no Registry
+* [`LESSONS.md`](./LESSONS.md) — histórico em PT-BR de decisões e bugs encontrados (Strategy A → B → discovery load-bearing, tags em Registry, SPIFFE+CR, etc.)
+* [`DEMO.md`](./DEMO.md) — roteiro de demo em PT-BR com prompts copy-paste
+* Repo-level [`LEARNINGS.md`](../LEARNINGS.md) — padrões reutilizáveis validados nesta demo (FastMCP no CR, Registry tags, SPIFFE+CR)
+* Repo-level [`CLAUDE.md`](../CLAUDE.md) — as 11 regras de produção
 
 ## Troubleshooting quick reference
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `AgentRegistry.list_mcp_servers()` returns `[]` | SPIFFE principal missing `agentregistry.viewer` | Re-run `deploy.sh` Step 2 |
-| Agent gets `HTTP 401` from Cloud Run | CR is `--no-allow-unauthenticated`, but SPIFFE access tokens aren't accepted by CR IAM | See [`ARCHITECTURE.md` §8.3-8.5](./ARCHITECTURE.md) — current demo uses `--allow-unauthenticated` |
-| Agent fails with `Compute Engine Metadata server unavailable` | Code is calling `id_token.fetch_id_token` (no GCE metadata server in Agent Runtime) | Use access token via `google.auth.default()` — see [`app/mcp_auth.py`](./orchestrator-agent/app/mcp_auth.py) |
+| Agent gets `HTTP 401` from Cloud Run | CR is `--no-allow-unauthenticated`, but SPIFFE access tokens aren't accepted by CR IAM | See [`LESSONS.md` §3](./LESSONS.md) — current demo uses `--allow-unauthenticated` |
+| Agent fails with `Compute Engine Metadata server unavailable` | Code is calling `id_token.fetch_id_token` (no GCE metadata server in Agent Runtime) | Don't mint ID tokens in Agent Runtime — see [`LESSONS.md` §2](./LESSONS.md) |
 | `agents-cli deploy` fails: lockfile is out of date | `pyproject.toml` changed without re-locking | Run `uv lock` in the agent dir (handled automatically by `deploy.sh` Step 5) |
-| `gcloud alpha agent-registry services create` rejects `--attributes` / `--labels` / `--tags` | Those flags do not exist; `attributes` is system-reserved readOnly | Encode tags in `--description` as `[tag:X]` — see [`ARCHITECTURE.md` §5](./ARCHITECTURE.md) |
-| Agent comes up but tools list is empty | Eager `MCPToolset()` at import time failed silently during deploy health check | Use the `_LazyToolset` wrapper (already in [`app/agent.py`](./orchestrator-agent/app/agent.py)) |
+| `gcloud alpha agent-registry services create` rejects `--attributes` / `--labels` / `--tags` | Those flags do not exist; `attributes` is system-reserved readOnly | Encode tags in `--description` as `[tag:X]` — see [`LESSONS.md` §1](./LESSONS.md) and [`ARCHITECTURE.md` §4](./ARCHITECTURE.md) |
+| Discovery returns `count: 0` even for clear keyword matches | `_normalize` reading tools from wrong path in Registry response | Fixed — see [`LESSONS.md` §10](./LESSONS.md) |
 | Cloud Run cold start makes first request time out | Agent's first call wakes up CR (~5-10s); `agents-cli run` has 120s default timeout | Re-run; subsequent calls are warm. Or set `--min-instances=1` on the MCPs |
 | `deployment_metadata.json` carries a stale Reasoning Engine ID | Scaffold leaves one from the template's prior deploy | `rm orchestrator-agent/deployment_metadata.json` before deploy (handled by Step 5+6) |

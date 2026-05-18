@@ -34,12 +34,16 @@ then picks the right MCP based on the substring match.
 Qual o sentimento atual do mercado sobre a Apple? Use suas ferramentas de descoberta.
 ```
 
-**What to observe**:
-1. In Cloud Trace, expand the trace — first tool call is `discover_tools_by_intent`
-   with `{intent: "sentiment"}` (or similar)
-2. The response includes only the `news-sentiment` MCP server entry
-3. The next tool call is `news_get_sentiment_score` with `{ticker: "AAPL"}`
-4. The final answer cites "news-sentiment MCP"
+**What to observe** (Cloud Trace, expand spans):
+1. **Turn 1** — `discover_tools_by_intent` com `{intent: "sentiment"}` ou similar.
+   A resposta inclui o entry `news-sentiment` com `matched_in` apontando para
+   o tool ou displayName que casou.
+2. **Turn 2** — `invoke_mcp_tool` com:
+   - `mcp_server_name`: o resource path completo retornado pela discovery
+   - `tool_name`: `get_sentiment_score`
+   - `arguments`: `{"ticker": "AAPL"}`
+3. Dentro do `invoke_mcp_tool` span, GET ao Registry (cache miss) + chamada MCP
+4. Resposta final cita o resource path do `news-sentiment` MCP
 
 Expected answer (paraphrased):
 > O sentimento agregado sobre a Apple (AAPL) está **muito positivo** (score 0.78),
@@ -81,12 +85,14 @@ PnL atual, cotação de mercado e manchete recente mais relevante.
 ```
 
 **What to observe**:
-1. The agent may or may not call discovery first (encourages it if it does)
-2. Three tool calls in sequence (order may vary):
-   * `portfolio_get_position_pnl(account_id="account-001", ticker="PETR4")`
-   * `market_get_stock_quote(ticker="PETR4")`
-   * `news_get_company_news(ticker="PETR4", limit=1)` or `news_search_news`
-3. Final answer cites all three MCPs
+1. **Turn 1** — `discover_tools_by_category(tag="...")` ou múltiplos
+   `discover_tools_by_intent` para localizar os 3 MCPs
+2. **Turns subsequentes** — múltiplos `invoke_mcp_tool`, cada um com o
+   `mcp_server_name` do MCP apropriado:
+   * `invoke_mcp_tool(name=<portfolio>, tool="get_position_pnl", args={"account_id": "account-001", "ticker": "PETR4"})`
+   * `invoke_mcp_tool(name=<market>, tool="get_stock_quote", args={"ticker": "PETR4"})`
+   * `invoke_mcp_tool(name=<news>, tool="get_company_news", args={"ticker": "PETR4", "limit": 1})`
+3. Resposta final cita os 3 MCPs pelo resource path completo
 
 Expected shape:
 > **Posição PETR4 (account-001)** — 500 ações @ avg cost R$ 32.10, mark R$ 38.42 →

@@ -1,24 +1,21 @@
-"""fintoolkit orchestrator — Financial analyst with dynamic MCP discovery.
+"""fintoolkit orchestrator — Dynamic MCP discovery with Agent Registry.
 
-Architecture:
-  * Three MCP servers (market-data, portfolio, news-sentiment) run on Cloud Run.
-  * deploy.sh registers each in Agent Registry and injects ONLY their registry
-    resource names (`MARKET_MCP_NAME`, `PORTFOLIO_MCP_NAME`, `NEWS_MCP_NAME`)
-    as env vars — URLs are NOT pre-baked. The Registry is the source of truth.
-  * At module import time we resolve each toolset by calling
-    `registry.get_mcp_toolset(name)`, which GETs the MCPServer resource and
-    extracts `interfaces[].url`. The MCP server itself is contacted lazily by
-    ADK on the first `get_tools()` call.
-  * For LOCAL development (no Registry entries for localhost), each `*_MCP_URL`
-    env var is used as a fallback when `*_MCP_NAME` is unset.
-  * Two meta-tools (discover_tools_by_intent, discover_tools_by_category) call
-    the Agent Registry to let the LLM introspect what's available.
-
-Design note: we deliberately do NOT use a `_LazyToolset` wrapper here. That
-wrapper is a useful production pattern when service availability at import
-time is uncertain (deploy health checks, transient failures); this demo
-favors simplicity and assumes Registry + MCP services are healthy. If you
-need that resilience pattern, see `experimental/governance-demo/`.
+Architecture (Option B — fully dynamic):
+  * The agent has ZERO knowledge of specific MCP servers at deploy time.
+    No `*_MCP_NAME` env vars. No pre-loaded toolsets.
+  * Three ADK function tools, all backed by `app/discovery.py`:
+      - `discover_tools_by_intent(intent)`   — substring search across
+        displayName, description, and each tool's name/description.
+      - `discover_tools_by_category(tag)`    — filter by `[tag:X]` markers
+        encoded in the MCPServer description (Registry has no writable
+        attributes — see ARCHITECTURE.md §5).
+      - `invoke_mcp_tool(mcp_server_name, tool_name, arguments)` — looks up
+        the MCPServer in the Registry, materializes a (cached) McpToolset,
+        finds the named tool, and invokes it with the provided args.
+  * The LLM MUST go through `discover_*` first to learn what's available.
+    `invoke_mcp_tool` is the only path to actually call a tool.
+  * New MCP servers registered in Agent Registry after deploy are
+    discoverable and invokable without re-deploying the agent.
 """
 
 from __future__ import annotations
@@ -29,13 +26,11 @@ import os
 import google.auth
 from google.adk.agents import Agent
 from google.adk.apps import App
-from google.adk.tools.mcp_tool import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
 from app.discovery import (
-    build_toolset_from_registry,
     discover_tools_by_category,
     discover_tools_by_intent,
+    invoke_mcp_tool,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,72 +41,51 @@ os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
 
 
-def _build_toolset(name_env_var: str, url_env_var: str, label: str) -> McpToolset:
-    """Resolve a toolset preferring Registry lookup over hardcoded URL.
-
-    1. If `<name_env_var>` is set → `registry.get_mcp_toolset(name)`. URL,
-       prefix, and auth come from the Registry. Cloud path.
-    2. Else if `<url_env_var>` is set → direct URL with `label` as
-       `tool_name_prefix`. Local-dev path.
-    3. Else → raise.
-    """
-    registry_name = os.environ.get(name_env_var, "").strip()
-    if registry_name:
-        logger.info("Resolving %s toolset via Registry: %s", label, registry_name)
-        return build_toolset_from_registry(registry_name)
-
-    direct_url = os.environ.get(url_env_var, "").strip()
-    if direct_url:
-        logger.info("Resolving %s toolset via direct URL (local dev): %s", label, direct_url)
-        return McpToolset(
-            connection_params=StreamableHTTPConnectionParams(url=direct_url),
-            tool_name_prefix=label,
-        )
-
-    raise RuntimeError(
-        f"Neither {name_env_var} (preferred, registry) nor {url_env_var} "
-        f"(fallback, direct URL) is set — cannot build {label!r} toolset"
-    )
-
-
-market_toolset = _build_toolset("MARKET_MCP_NAME", "MARKET_MCP_URL", "market")
-portfolio_toolset = _build_toolset("PORTFOLIO_MCP_NAME", "PORTFOLIO_MCP_URL", "portfolio")
-news_toolset = _build_toolset("NEWS_MCP_NAME", "NEWS_MCP_URL", "news")
-
-
 _INSTRUCTION = """\
-Você é o **fintoolkit_orchestrator**, um analista financeiro virtual que opera
-sobre servidores MCP descobertos dinamicamente via **Agent Registry**.
+Você é o **fintoolkit_orchestrator**, um analista financeiro virtual.
+Você opera sobre servidores MCP descobertos dinamicamente via **Agent Registry** —
+você NÃO tem conhecimento prévio de quais MCPs ou tools existem.
 
-Os MCPs disponíveis (categorias usadas no Registry) são:
+Você tem exatamente **3 ferramentas**:
 
-  * **market** — cotações, histórico e índices (PETR4, AAPL, IBOV...).
-  * **portfolio** — posições, PnL e alocação de contas mockadas (account-001/002/003).
-  * **news** — manchetes e sentimento agregado por ticker.
+1. `discover_tools_by_intent(intent: str)` — busca MCPs cujo nome, descrição,
+   ou nome/descrição de alguma tool contém a palavra-chave. Retorna `matched_in`
+   indicando onde o match aconteceu.
+2. `discover_tools_by_category(tag: str)` — filtra MCPs por categoria (`market`,
+   `portfolio`, `news`, ...).
+3. `invoke_mcp_tool(mcp_server_name, tool_name, arguments)` — executa uma tool
+   de um MCP específico. Use os valores `name` (do MCP) e `tools[].name`
+   retornados pelo discovery — sem prefixos.
 
-## Como você trabalha
+## Fluxo obrigatório
 
-1. **Antes de invocar tools de dados**, considere chamar `discover_tools_by_intent`
-   ou `discover_tools_by_category` para confirmar quais servidores MCP estão disponíveis
-   e o que cada um expõe — isso dá rastreabilidade no Cloud Trace e evita chamadas erradas.
-   - `discover_tools_by_category(tag=...)` quando o usuário pergunta sobre uma área
-     específica: `tag="market"`, `"portfolio"` ou `"news"`.
-   - `discover_tools_by_intent(intent=...)` quando o usuário não é explícito (passe
-     uma palavra-chave em inglês — `"sentiment"`, `"portfolio"`, `"market"`).
+Para qualquer pergunta do usuário que envolva dados:
 
-2. **Depois**, invoque as tools pelos nomes que a descoberta retornou. Os prefixos
-   refletem o `displayName` no Registry (ex: tools de `market-data` ficam
-   `market_data_*`; `portfolio` fica `portfolio_*`; `news-sentiment` fica
-   `news_sentiment_*`).
+1. **Descubra**: chame `discover_tools_by_intent` ou `discover_tools_by_category`
+   com um keyword relevante. Examine `matches[].name`, `matches[].tools[]`, e
+   `matches[].matched_in`.
+2. **Invoque**: chame `invoke_mcp_tool` com:
+   - `mcp_server_name` = `matches[i].name` (caminho completo de recurso)
+   - `tool_name` = `matches[i].tools[j].name` (sem prefixo)
+   - `arguments` = dict com os argumentos esperados pela tool (verifique a
+     descrição da tool em `tools[j].description`).
+3. **Componha** a resposta para o usuário citando o MCP de origem.
 
-3. **Sempre cite** qual servidor MCP forneceu cada dado (ex: "via market-data MCP").
+Se uma chamada retornar `{"error": ...}`, leia a mensagem e tente outra
+abordagem (ex: `available_tools` lista o que existe, sugerindo correção).
+
+## Múltiplos MCPs
+Para perguntas que combinam dados (ex: PnL + cotação + notícia), faça discovery
+uma vez (ou por categoria) e invoke múltiplas vezes em sequência.
 
 ## Idioma
-Responda sempre em **português brasileiro**, mantendo nomes técnicos (ticker, PnL) em inglês.
+Responda sempre em **português brasileiro**. Mantenha termos técnicos
+(ticker, PnL, MCP) em inglês.
 
-## Quando algo der errado
-Se uma tool retornar `error`, explique ao usuário o que faltou e sugira alternativas
-(tickers disponíveis, contas disponíveis). Não invente dados.
+## Política
+Não invente dados. Se a discovery não retorna o MCP esperado, diga isso
+explicitamente. Cite o `mcp_server_name` (ou ao menos o displayName) na
+resposta para rastreabilidade.
 """
 
 root_agent = Agent(
@@ -119,11 +93,9 @@ root_agent = Agent(
     model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
     instruction=_INSTRUCTION,
     tools=[
-        market_toolset,
-        portfolio_toolset,
-        news_toolset,
         discover_tools_by_intent,
         discover_tools_by_category,
+        invoke_mcp_tool,
     ],
 )
 
