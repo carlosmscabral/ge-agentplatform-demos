@@ -12,6 +12,7 @@ Each demo is fully parameterized — clone, set your GCP project, and deploy.
 | [`evals-demo/`](evals-demo/) | Online evaluation and monitoring | `agents-cli deploy`, Gen AI Evaluation Service, online monitors, traffic generation |
 | [`a2a-demo/`](a2a-demo/) | Agent-to-Agent protocol on Agent Runtime | A2A protocol, RemoteA2aAgent, agent cards, multi-agent sequential deploy |
 | [`spiffe-registry-demo/`](spiffe-registry-demo/) | SPIFFE identity + Agent Registry discovery | SPIFFE `--agent-identity`, auto-registration, `AgentRegistry.get_remote_a2a_agent()`, dynamic discovery |
+| [`mcp-discovery-demo/`](mcp-discovery-demo/) | Financial Analyst Toolkit — dynamic MCP discovery | 3 FastMCP servers on Cloud Run (JSON-RPC), Agent Registry MCP catalog with tags (encoded in description), SPIFFE orchestrator discovers tools by keyword + category, `_LazyToolset` deferred materialization |
 
 > Experimental demos and references are in [`experimental/`](experimental/) — see its README for details.
 
@@ -59,6 +60,8 @@ ge-agentplatform-demos/
 ├── a2a-demo/                     A2A protocol demo (multi-agent)
 │
 ├── spiffe-registry-demo/         SPIFFE identity + Agent Registry discovery
+│
+├── mcp-discovery-demo/           Dynamic MCP discovery (3 FastMCP servers on Cloud Run + SPIFFE orchestrator)
 │
 ├── evals-demo/                   Online evaluation demo
 │   ├── .env.template

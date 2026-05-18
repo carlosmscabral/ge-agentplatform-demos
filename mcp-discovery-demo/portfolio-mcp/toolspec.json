@@ -1,0 +1,37 @@
+{
+  "tools": [
+    {
+      "name": "get_portfolio_holdings",
+      "description": "List all holdings (ticker, shares, avg_cost) for an account.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {"account_id": {"type": "string"}},
+        "required": ["account_id"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "get_position_pnl",
+      "description": "Compute unrealized PnL for a single position (current mark vs avg cost).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "account_id": {"type": "string"},
+          "ticker": {"type": "string"}
+        },
+        "required": ["account_id", "ticker"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "get_portfolio_allocation",
+      "description": "Return % allocation per ticker based on current market value.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {"account_id": {"type": "string"}},
+        "required": ["account_id"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    }
+  ]
+}

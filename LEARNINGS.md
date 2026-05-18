@@ -102,6 +102,16 @@ A `_LazyToolset` wrapper is also required to defer the `get_mcp_toolset()` call 
 ### URL uniqueness constraint
 Agent Registry enforces URL uniqueness across services. If a URL is already registered by another service, `services create` will fail with `Interface URL is already in use by another service`. Delete the old service first.
 
+### No user-writable tags/labels/attributes on MCPServer/Service
+Verified against `https://agentregistry.googleapis.com/$discovery/rest?version=v1alpha`:
+
+- `MCPServer.attributes` is `readOnly` + system-reserved. Only valid keys are `agentregistry.googleapis.com/system/RuntimeIdentity` and `…/system/RuntimeReference` — both platform-populated.
+- `Service` has no `labels`, `tags`, or `attributes` field.
+- Top-level custom fields injected into `mcpServerSpec.content` (`_meta`, `tags`, etc.) are silently stripped — the content is validated against the MCP `tools/list` schema.
+- `Tool.annotations` only accepts: `title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`. Only `title` is free-form string, but it's semantically a human title.
+
+**Workaround**: encode metadata in `Service.description` (2048 chars) as `[key:value]` markers and parse client-side. Both `mcp-discovery-demo` and `experimental/governance-demo` use this pattern. The `gcloud alpha agent-registry services create --description="[tag:market] [domain:finance] …"` invocation is what survives.
+
 ---
 
 ## IAM & Permissions
@@ -225,6 +235,40 @@ The `readOnlyHint` and `destructiveHint` annotations in `toolspec.json` are what
 }
 ```
 These must match between the MCP server's `list_tools()` response and the Agent Registry `toolspec.json`.
+
+### FastMCP 2.x works on Cloud Run (older note about FastMCP 1.x is obsolete)
+The earlier note above about "use low-level `mcp.server.Server`, not `FastMCP`" applied to FastMCP **1.x**. **FastMCP 2.13+ binds cleanly to Cloud Run's `$PORT`**:
+
+```python
+from fastmcp import FastMCP
+mcp = FastMCP("my-server")
+@mcp.tool()
+def my_tool(x: str) -> dict: ...
+if __name__ == "__main__":
+    mcp.run(transport="http", host="0.0.0.0", port=int(os.environ["PORT"]), path="/mcp")
+```
+
+Validated empirically in `mcp-discovery-demo/market-data-mcp/tests/test_http_wire.py` (subprocess + `fastmcp.Client(url)` probe) AND deployed live to 3 Cloud Run services with no binding issues. The low-level `mcp.server.Server` pattern is no longer required and adds boilerplate without benefit.
+
+### Cloud Run does NOT support SPIFFE / Agent Identity (as of 2026-05)
+Only **Agent Runtime** (Vertex AI Reasoning Engines) and **Gemini Enterprise** support Agent Identity / SPIFFE today. `gcloud run deploy` has no `--agent-identity`, `--workload-identity`, or `--identity-type` flag. Managed Workload Identities support GKE Autopilot and Compute Engine in Preview, but NOT Cloud Run.
+
+Implication for **Agent Runtime SPIFFE agent → private Cloud Run**:
+
+1. `google.oauth2.id_token.fetch_id_token(audience=cr_url)` **fails** in Agent Runtime — no GCE metadata server. Symptom: `Compute Engine Metadata server unavailable. Response status: 500`.
+2. Sending the SPIFFE-bound access token from `google.auth.default()` as `Authorization: Bearer …` to Cloud Run returns **HTTP 401**. Cloud Run IAM only accepts OIDC ID tokens, and the SPIFFE token is DPoP-bound (cryptographically tied to an X.509 cert that has no validator outside Agent Gateway).
+3. Granting `roles/run.invoker` to `principal://<spiffe>` on the Cloud Run service has **no effect** for direct calls — that binding shape only resolves inside the IAP plane (i.e., when Agent Gateway sits in front).
+
+**Options**, ordered by simplicity:
+
+| Option | Trade-off |
+|---|---|
+| Cloud Run `--allow-unauthenticated` | Loses CR IAM; agent's bearer is logged but ignored. Acceptable for demos. |
+| FastMCP app-layer auth (validate token via `oauth2.googleapis.com/tokeninfo`) | Keeps CR public on the network but enforces principal at the app. Tokeninfo behavior on DPoP-bound tokens not yet verified. |
+| Migrate MCPs to GKE Autopilot + Managed Workload Identity (Preview) | Full SPIFFE end-to-end without Agent Gateway. |
+| Add Agent Gateway with `roles/iap.egressor` on the SPIFFE principal + `roles/run.invoker` to `service-{PROJECT_NUMBER}@gcp-sa-iap.iam.gserviceaccount.com` on CR | The documented production path. |
+
+For agent-side code, do **not** call `fetch_id_token`. Send the SPIFFE-bound access token (`google.auth.default()` + `Credentials.refresh()`) and let the public Cloud Run (or Agent Gateway, or app middleware) do whatever it does.
 
 ---
 

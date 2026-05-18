@@ -1,0 +1,40 @@
+{
+  "tools": [
+    {
+      "name": "get_company_news",
+      "description": "Recent news headlines for a ticker (most recent first).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticker": {"type": "string"},
+          "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20}
+        },
+        "required": ["ticker"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "get_sentiment_score",
+      "description": "Aggregate news sentiment for a ticker (score in [-1, 1], label, article count).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {"ticker": {"type": "string"}},
+        "required": ["ticker"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "search_news",
+      "description": "Substring search across all headlines (case-insensitive).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 20}
+        },
+        "required": ["query"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    }
+  ]
+}

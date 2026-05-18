@@ -1,0 +1,41 @@
+{
+  "tools": [
+    {
+      "name": "get_stock_quote",
+      "description": "Get latest quote (price, change, volume) for a stock ticker (e.g. PETR4, AAPL).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticker": {"type": "string", "description": "Stock ticker symbol"}
+        },
+        "required": ["ticker"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "get_historical_prices",
+      "description": "Get last N days of closing prices for a ticker. Default 30, max 60.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "ticker": {"type": "string"},
+          "days": {"type": "integer", "default": 30, "minimum": 1, "maximum": 60}
+        },
+        "required": ["ticker"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    },
+    {
+      "name": "get_market_index",
+      "description": "Snapshot of a market index (IBOV, SP500, NASDAQ).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "index": {"type": "string", "description": "Index symbol"}
+        },
+        "required": ["index"]
+      },
+      "annotations": {"readOnlyHint": true, "idempotentHint": true}
+    }
+  ]
+}
