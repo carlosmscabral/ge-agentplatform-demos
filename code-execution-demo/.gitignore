@@ -1,0 +1,12 @@
+# Generated at deploy time
+.env
+**/.requirements.txt
+**/deployment_metadata.json
+.deploy-state
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
