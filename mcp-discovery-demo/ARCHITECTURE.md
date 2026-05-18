@@ -152,11 +152,154 @@ Detalhes importantes:
   pela discovery (`get_stock_quote`) seja o mesmo aceito por `invoke_mcp_tool`.
   Se usássemos `registry.get_mcp_toolset()` (que aplica prefixo derivado do
   displayName), a LLM precisaria saber concatenar `market_data_get_stock_quote`.
-- **Cache process-local**: a primeira invocação de um MCP custa 1 GET ao
-  Registry; as próximas vão direto ao Cloud Run. O cache é resetado quando a
-  instância do Agent Runtime reinicia. Para produção, considere TTL.
+- **Cache process-local de toolsets** — detalhado na próxima seção.
 - **Erros explícitos**: se a tool não existe, devolve `available_tools` para a
   LLM tentar de novo com o nome certo.
+
+---
+
+## 2.4 Caching — o que é cacheado, o que não é, e por quê
+
+A camada de descoberta + invocação dinâmica naturalmente bate no Agent
+Registry com frequência. Para manter a latência razoável sem perder
+frescura, o código tem **um único cache** com escopo bem definido. Esta
+seção descreve exatamente o que é cacheado, qual é a chave, qual é o
+tempo de vida, e por que NÃO cacheamos outras coisas.
+
+### O que é cacheado
+
+```python
+# app/discovery.py
+_TOOLSET_CACHE: dict[str, McpToolset] = {}
+
+def _materialize_toolset(mcp_server_name: str):
+    if mcp_server_name in _TOOLSET_CACHE:
+        return _TOOLSET_CACHE[mcp_server_name]   # ← cache hit
+    # ... cache miss path: GET registry + build McpToolset
+    server_details = reg.get_mcp_server(mcp_server_name)   # 1 HTTP GET
+    url = server_details["interfaces"][0]["url"]
+    toolset = McpToolset(
+        connection_params=StreamableHTTPConnectionParams(url=url),
+        tool_name_prefix=None,
+    )
+    _TOOLSET_CACHE[mcp_server_name] = toolset
+    return toolset
+```
+
+| Propriedade | Valor |
+|---|---|
+| **O que é** | `McpToolset` materializado (com URL já resolvida + connection params) |
+| **Chave** | `mcp_server_name` (resource path completo: `projects/{P}/locations/{R}/mcpServers/agentregistry-<uuid>`) |
+| **Escopo** | Processo único — `dict` Python em memória, não compartilhado entre instâncias |
+| **Tempo de vida** | Vida do processo. Não há TTL, não há eviction policy |
+| **Tamanho** | Ilimitado (na prática, ≤ número de MCPs únicos que a LLM invocou) |
+| **Invalidação** | Nenhuma proativa. Restart da instância limpa tudo |
+| **Thread safety** | Confia no GIL do Python — escritas são atômicas; race em cache-miss simultâneo pode gerar materializações duplicadas (idempotente, sem corromper) |
+
+### O que NÃO é cacheado (deliberadamente)
+
+| Operação | Onde acontece | Por que não cacheia |
+|---|---|---|
+| `list_mcp_servers()` em `discover_tools_by_*` | Toda chamada de discovery | Discovery precisa ser **fresca** — novos MCPs registrados aparecem na próxima descoberta sem reiniciar o agente. É o argumento principal da demo. |
+| `get_mcp_server(name)` em cache miss | Só na primeira materialização de cada MCP | Cacheado **indiretamente** via `_TOOLSET_CACHE` — uma vez que o toolset está construído, esse GET não acontece de novo. |
+| Resposta de tool MCP (`get_stock_quote("AAPL")`) | Toda invocação | Tools podem mudar (cotação, sentimento). Cache aqui seria responsabilidade do MCP server, não do orquestrador. |
+| Sessão MCP (Streamable HTTP) | Reconectada a cada turno | O `McpToolset` mantém connection params mas o `mcp.client` session é stateless por design da implementação ADK. |
+
+### Fluxo com cache (sequência real, primeira vs segunda chamada)
+
+```
+─── Primeira invocação de market-data nesta instância ─────────────────────
+LLM ──► invoke_mcp_tool(name="...mcpServers/agentregistry-2bf9...",
+                        tool_name="get_stock_quote", args={"ticker":"AAPL"})
+                │
+                ▼
+        _materialize_toolset(name)
+                │
+                ▼
+        cache_lookup("...agentregistry-2bf9...") → MISS
+                │
+                ▼
+        registry.get_mcp_server(name)
+                │  HTTP GET https://agentregistry.googleapis.com/v1alpha/.../mcpServers/agentregistry-2bf9...
+                ▼
+        server_details["interfaces"][0]["url"] → "https://fintoolkit-market-data-mcp-...run.app/mcp"
+                │
+                ▼
+        McpToolset(connection_params=..., tool_name_prefix=None)
+                │
+                ▼
+        _TOOLSET_CACHE["...agentregistry-2bf9..."] = toolset
+                │  LOG: "Materialized + cached toolset for ... → ..."
+                ▼
+        toolset.get_tools()   →   conecta ao Cloud Run, lista tools
+        target.run_async(args={"ticker":"AAPL"}, tool_context=...)
+        return {"result": {...}}
+
+─── Segunda invocação de market-data (mesma instância) ────────────────────
+LLM ──► invoke_mcp_tool(name="...agentregistry-2bf9...",
+                        tool_name="get_historical_prices", args={...})
+                │
+                ▼
+        _materialize_toolset(name)
+                │
+                ▼
+        cache_lookup("...agentregistry-2bf9...") → HIT  (≈0ms)
+                │
+                ▼  (sem GET ao Registry, sem reconstrução do toolset)
+        toolset.get_tools()   →   conecta ao Cloud Run
+        target.run_async(args={...}, tool_context=...)
+        return {"result": {...}}
+```
+
+### Evidência empírica (validado em produção)
+
+Após emitir 2 requests consecutivas que usam o mesmo MCP `market-data`:
+
+1. `"Qual a cotação atual da GOOGL?"` → invoca `get_stock_quote`
+2. `"Agora me dê o histórico de 7 dias da GOOGL"` → invoca `get_historical_prices`
+
+Os logs do Cloud Run (`resource.type=ReasoningEngine`) mostram exatamente:
+
+| Operação | Quantidade | Comentário |
+|---|---|---|
+| `Materialized + cached toolset for ...market-data...` | **0** novas | `market-data` já estava no cache desde uma execução anterior |
+| `GET .../mcpServers/agentregistry-...2bf9...` (URL resolution) | **0** | Confirmou cache hit |
+| `GET .../mcpServers` (list — discovery) | **3** | Uma por discovery feita pela LLM (Request 1 + Request 2 fizeram discovery cada uma) |
+
+Comparando com o teste E2E inicial (3 atos com cold cache):
+
+| MCP | Materializações no total | Invocações no total |
+|---|---|---|
+| `market-data` | 1 | 2 (Act 3 + GOOGL teste subsequente) |
+| `portfolio` | 1 | 1 |
+| `news-sentiment` | 1 (no Act 1) | 2 (Act 1 + Act 3) |
+
+**1 materialização por MCP, N invocações** — exatamente o comportamento
+esperado de um cache write-once.
+
+### Quando esse cache é (e não é) suficiente
+
+**Suficiente para esta demo porque**:
+
+- Cada instância do Agent Runtime serve várias requests dentro da janela de
+  `Min Instances=1` (24h+ típicos antes de reciclar).
+- As URLs dos Cloud Run são estáveis dentro de um deploy.
+- O custo de re-materializar (1 GET + construção de objeto) é < 200ms — não
+  vale a complexidade de adicionar TTL.
+
+**NÃO suficiente em produção quando**:
+
+| Cenário | Problema | Mitigação |
+|---|---|---|
+| URL do MCP muda no Registry sem redeploy do agente | Cache tem URL stale → invocação falha | Adicionar TTL curto (ex: 5–15 min) OU invalidar no primeiro erro de conexão |
+| Restart frequente da instância (autoscaling agressivo) | Cache se esvazia frequentemente, todo turno paga 1 GET | Acceptable; é o que o cache resolve dentro de cada vida útil |
+| Muitos MCPs (10s) com baixa frequência de uso de cada | Cache pode crescer e ocupar memória | Trocar `dict` por `cachetools.LRUCache(maxsize=N)` |
+| Múltiplas réplicas → cache não compartilhado | Cada réplica paga seu próprio cold cache | Move para um cache compartilhado (Memorystore Redis) ou aceita o custo |
+| `tool_context` precisa propagar identidade do usuário pra Cloud Run | O `McpToolset` cacheado é compartilhado entre sessões | Cache hoje não tem essa preocupação porque MCPs são públicos e stateless; com auth real seria necessário cachear por `(name, principal)` |
+
+A implementação atual é **deliberadamente o mais simples possível** — uma
+dict, sem TTL, sem invalidação, sem locking. O comentário no código aponta
+exatamente para essas opções avançadas se forem necessárias.
 
 ---
 

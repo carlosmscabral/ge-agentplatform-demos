@@ -102,12 +102,68 @@ Expected shape:
 
 ---
 
-## Act 4 — Resilience under MCP outage
+## Act 4 — Cache hit demonstration
 
-**What this shows**: the `_LazyToolset` defers MCP toolset materialization to
-first use, so the agent stays healthy even if a downstream MCP is unreachable.
-Discovery still works (Agent Registry is the source of truth), and the agent
-reports the failure gracefully.
+**What this shows**: `invoke_mcp_tool` mantém um cache process-local dos
+toolsets materializados, chaveado por `mcp_server_name`. A primeira invocação
+de cada MCP custa 1 GET ao Registry para resolver a URL; as subsequentes vão
+direto ao Cloud Run. Discovery NÃO é cacheada — ela sempre bate no Registry.
+
+Detalhes técnicos completos em [`ARCHITECTURE.md` §2.4](./ARCHITECTURE.md).
+
+**Setup**: certifique-se de estar em uma instância "morna" — isto é, que já
+tenha servido pelo menos uma request usando `market-data` recentemente. Se
+fizer cold start (`agents-cli deploy --list` mostra `Min Instances: 1`,
+então a instância tipicamente persiste), o primeiro request abaixo já estará
+em "cache hit".
+
+**Prompts** (rode em sequência, mesma instância):
+
+```
+1. "Qual a cotação atual da GOOGL?"
+2. "Agora me dê o histórico de 7 dias da GOOGL."
+```
+
+Ambos usam o MCP `market-data`, mas tools diferentes (`get_stock_quote` e
+`get_historical_prices`).
+
+**What to observe** (logs do Reasoning Engine):
+
+```bash
+gcloud logging read \
+  'resource.type="aiplatform.googleapis.com/ReasoningEngine"
+   AND resource.labels.reasoning_engine_id="<YOUR_RE_ID>"
+   AND textPayload:"Materialized + cached"' \
+  --limit=10 --freshness=10m --format='value(timestamp,textPayload)'
+```
+
+Comportamento esperado:
+
+| Métrica | Request 1 | Request 2 |
+|---|---|---|
+| `discover_tools_by_*` chamadas | 1 (LIST .../mcpServers) | 1 (LIST .../mcpServers) |
+| `Materialized + cached toolset for ...market-data...` | **1** (cold) ou **0** (já cacheado) | **0** sempre — cache hit |
+| `GET .../mcpServers/agentregistry-...2bf9...` (resolução de URL) | **1** ou **0** | **0** — cache hit |
+| `mcp_call` (HTTP POST `.../mcp`) | **1** | **1** (toolset reutilizado) |
+| Latência total (cache hit) | ~3s | **~1.5–2s** (ganho do cache) |
+
+Validado in vivo no commit `73e203c`: 2 requests consecutivos para GOOGL
+geraram **0 novas materializações** e **0 GETs** para o resource path do
+`market-data` MCP (que já estava em cache de uma execução anterior).
+
+**Limpando o cache (para reset entre demos)**: a única forma é forçar
+restart da instância do Reasoning Engine — não há comando para flush
+explícito (cache é process-local). Na prática, a melhor estratégia é
+deixar uma demo fluir e usar o ato 4 como demonstração natural do cache.
+
+---
+
+## Act 5 — Resilience under MCP outage
+
+**What this shows**: o cache de toolsets sobrevive a falhas temporárias do
+Cloud Run — `_materialize_toolset` falha apenas se o Registry estiver
+inacessível. O Cloud Run "morto" só é detectado quando `get_tools()` ou
+`run_async()` é chamado, e o agente reporta o erro graciosamente.
 
 **Setup** (temporarily break one MCP — example: `portfolio`):
 ```bash
