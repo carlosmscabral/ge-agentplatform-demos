@@ -1,13 +1,23 @@
-"""MCP tools that expose the authenticated user's identity context."""
+"""MCP tools that expose the authenticated user's identity context.
 
-from app.middleware import current_claims
+We read claims from `request.state.claims` via FastMCP's `get_http_request()`
+helper. ContextVar-based access (was our original approach) does NOT survive
+FastMCP's task boundaries — the tool runs in a different asyncio context
+from the Starlette middleware that set the ContextVar, so it'd come back
+as None inside the tool. The Starlette request object, on the other hand,
+is request-scoped and accessible from anywhere in the request lifecycle
+via FastMCP's helper.
+"""
+
+from fastmcp.server.dependencies import get_http_request
 
 
 def _claims() -> dict:
-    claims = current_claims.get()
+    request = get_http_request()
+    claims = getattr(request.state, "claims", None)
     if claims is None:
-        # Middleware enforces auth on /mcp routes, so this path should never
-        # fire — but guard anyway for robustness.
+        # Middleware enforces auth on /mcp routes for tools/call — this path
+        # should never fire — but guard for robustness.
         raise RuntimeError("no authenticated user context")
     return claims
 

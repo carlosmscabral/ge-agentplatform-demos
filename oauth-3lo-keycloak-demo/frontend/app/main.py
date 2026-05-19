@@ -252,6 +252,24 @@ class ChatRequest(BaseModel):
     user_id: str
 
 
+async def _try_chat(req: "ChatRequest") -> dict:
+    """Single attempt of the stream_query flow. Returns parsed result dict."""
+    payload = {
+        "class_method": "stream_query",
+        "input": {
+            "user_id": req.user_id,
+            "session_id": req.session_id,
+            "message": req.message,
+        },
+    }
+    events = await _stream_agent(payload, ensure_session_for=(req.user_id, req.session_id))
+    auth_req = _extract_auth_request(events)
+    if auth_req:
+        return {"needs_auth": True, **auth_req}
+    text = _extract_final_text(events)
+    return {"needs_auth": False, "text": text or ""}
+
+
 @app.post("/chat")
 async def chat(req: ChatRequest) -> JSONResponse:
     """Forward user prompt to the agent and surface either text or an auth request.
@@ -270,23 +288,29 @@ async def chat(req: ChatRequest) -> JSONResponse:
     request (the redirect lands back on this frontend's domain, so the cookies
     are sent automatically).
     """
-    payload = {
-        "class_method": "stream_query",
-        "input": {
-            "user_id": req.user_id,
-            "session_id": req.session_id,
-            "message": req.message,
-        },
-    }
-    events = await _stream_agent(payload, ensure_session_for=(req.user_id, req.session_id))
+    # Workaround for the known pyOpenSSL/urllib3 race in google-auth that the
+    # platform's mTLS path hits intermittently (internal bugs b/504129769 and
+    # b/512459826): retrieveCredentials raises ValueError("Context has already
+    # been used to create a Connection") which ADK swallows as
+    # RuntimeError("Failed to retrieve credential …"), the runner thread dies
+    # and the SSE stream closes empty. Retry once on empty response — second
+    # attempt usually wins because the racing client has finished.
+    result = await _try_chat(req)
+    if not result.get("needs_auth") and not result.get("text"):
+        logger.warning(
+            "Empty agent response for user=%s session=%s — retrying once",
+            req.user_id, req.session_id,
+        )
+        import asyncio
+        await asyncio.sleep(2)
+        result = await _try_chat(req)
 
-    auth_req = _extract_auth_request(events)
-    if auth_req:
+    if result.get("needs_auth"):
         logger.info(
             "Agent requested user credential (function_call_id=%s, has_nonce=%s)",
-            auth_req["function_call_id"], bool(auth_req.get("consent_nonce")),
+            result["function_call_id"], bool(result.get("consent_nonce")),
         )
-        resp = JSONResponse({"needs_auth": True, **auth_req})
+        resp = JSONResponse(result)
         # Cookies must reach /validateUserId after the redirect. SameSite=lax
         # so they survive the cross-site redirect (Keycloak → Google → us).
         # Secure=True because Cloud Run is always HTTPS.
@@ -294,16 +318,16 @@ async def chat(req: ChatRequest) -> JSONResponse:
             "user_id", req.user_id,
             max_age=600, httponly=True, secure=True, samesite="lax", path="/",
         )
-        if auth_req.get("consent_nonce"):
+        if result.get("consent_nonce"):
             resp.set_cookie(
-                "consent_nonce", auth_req["consent_nonce"],
+                "consent_nonce", result["consent_nonce"],
                 max_age=600, httponly=True, secure=True, samesite="lax", path="/",
             )
         return resp
 
     return JSONResponse({
         "needs_auth": False,
-        "text": _extract_final_text(events) or "(empty response)",
+        "text": result.get("text") or "(empty response)",
     })
 
 

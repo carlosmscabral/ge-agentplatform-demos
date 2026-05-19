@@ -123,6 +123,12 @@ class KeycloakAuthMiddleware:
                 logger.warning("Rejecting %s %s: %s", method, path, e)
                 return await _send_json_error(send, 403, {"error": "invalid_token", "detail": str(e)})
 
+            # Stash claims in scope["state"] so tools can read via
+            # get_http_request().state.claims — survives FastMCP task
+            # boundaries (ContextVar doesn't).
+            state = scope.get("state") or {}
+            state["claims"] = claims
+            scope["state"] = state
             token_var = current_claims.set(claims)
             logger.info(
                 "Authenticated %s %s as sub=%s username=%s",

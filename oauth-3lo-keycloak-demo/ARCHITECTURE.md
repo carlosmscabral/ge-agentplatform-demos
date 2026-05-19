@@ -133,6 +133,354 @@ Chamado pela ADK via gRPC/REST em `iamconnectorcredentials.googleapis.com/v1alph
 
 ---
 
+## Inventário de tokens
+
+Tudo que é "token" no sistema, quem emite, quem guarda, quem valida, vida útil e formato. Use isto como mapa-mestre quando algo falha em "auth".
+
+| Token | Emitido por | Formato | Onde fica armazenado | Quem usa pra autenticar | Vida útil | Renovável? |
+|-------|-------------|---------|----------------------|--------------------------|-----------|-----------|
+| **OAuth `code` do Keycloak** | Keycloak `/auth` (depois do consent) | Opaque string (~32 chars) | Query param `?code=…` no redirect do browser para o oauthcallback | Google (one-shot, troca por tokens) | ~10s | Não — uso único |
+| **`access_token` do Keycloak** | Keycloak `/token` (depois do code-exchange) | JWT RS256, claims: `iss`, `aud`, `sub`, `preferred_username`, `email`, `realm_access.roles`, `exp`, `iat` | Vault gerenciado do Google (cofre do Connector), per-`(connector, user_id)` | MCP server (Bearer header, validado contra JWKS Keycloak) | 5 min (default Keycloak) | Sim, via refresh_token |
+| **`refresh_token` do Keycloak** | Keycloak `/token` (junto com access_token) | Opaque string longa | Vault gerenciado do Google (com o access_token) | Google internamente (troca por novo access_token quando expira) | 30 min (default Keycloak) | Não — emite novo refresh a cada uso |
+| **SPIFFE X.509 cert do agente** | Agent Identity (Google) na criação do RE com `--agent-identity` | X.509 cert + key, cert-bound (DPoP) | Container do Agent Runtime (volume injetado) | Agent → control-plane GCP (mTLS), Agent → APIs Google | 24h (rotacionado automaticamente) | Sim, automático |
+| **Workload access token do agente** | Agent Identity, derivado do cert SPIFFE | Bearer JWT cert-bound | Memória do container | Calls do agente para `agentregistry.googleapis.com`, `iamconnectorcredentials.googleapis.com`, `aiplatform.googleapis.com` | ~1h | Sim, automático |
+| **`user_id_validation_state`** | Google (no oauthcallback do connector) | Opaque base64-like string | Query param no redirect para `continue_uri` | Frontend → `credentials:finalize` (prova que o callback foi válido) | Curta (~minutos) | Não — uso único |
+| **`consent_nonce`** | Google (no `retrieveCredentials` LRO, junto com `authorizationUri`) | UUID v4 | Frontend cookie `consent_nonce`; depois enviado em `:finalize` body | Google (binds finalize call ao consent attempt) | Curta (~minutos) | Não — uso único |
+| **`user_id` (do agente)** | App do agente (ADK) | String livre | Frontend cookie `user_id`; campo `user_id` no Agent Runtime session | Google (chave de lookup no vault: token guardado sob `(connector, user_id)`) | Lifetime do session/cookie | N/A |
+| **`Mcp-Session-Id`** | MCP server (FastMCP) na resposta de `initialize` | UUID hex | Headers entre Agent e MCP | MCP server (correlaciona requests da mesma sessão MCP) | Vida da sessão MCP no container | Não — nova sessão = novo ID |
+| **`session_id` (Agent Runtime)** | Frontend (UUID-like local) | String livre | Field `session_id` no payload `stream_query` | Agent Runtime `InMemorySessionService` (correlaciona conversas) | Vida do container do agente | Não — sessão é per `(user_id, session_id)` |
+| **OAuth `state` (no auth_uri)** | Google (dentro do connector) | Opaque base64 longo | Query param do auth_uri → redirect para Keycloak → preservado de volta no oauthcallback | Google (correlaciona o callback ao request original) | Curta | Não — uso único |
+| **Cookie SA do frontend** | Cloud Run (default SA do projeto) | Service account token via ADC | ADC do container do frontend | Frontend → `iamconnectorcredentials.googleapis.com:finalize` (precisa `roles/iamconnectors.editor`) | ~1h | Sim, automático |
+
+### Como os tokens se transformam end-to-end
+
+```
+                                    ┌─────────────┐
+                                    │   USUÁRIO   │
+                                    └──────┬──────┘
+                                           │ credenciais Keycloak
+                                           ▼
+            ┌──────────────────────────────────────────────────────┐
+            │                    KEYCLOAK                          │
+            │  /auth  ──issue──▶  OAuth code  ──redirect──▶ Google │
+            │                                                       │
+            │  /token  ──exchange code──▶  access_token (JWT) +    │
+            │                              refresh_token            │
+            └──────────────────────────────────────────────────────┘
+                              │
+                              │ access_token + refresh_token
+                              ▼
+            ┌──────────────────────────────────────────────────────┐
+            │           GOOGLE VAULT (iamconnectorcredentials)     │
+            │   stored as: vault[(connector_name, user_id)]        │
+            │   = { access_token, refresh_token, expires_at }      │
+            └──────────────────────────────────────────────────────┘
+                              │
+                              │ retrieveCredentials(user_id)
+                              ▼
+            ┌──────────────────────────────────────────────────────┐
+            │              AGENT RUNTIME (ADK)                     │
+            │   - recebe o token do vault                          │
+            │   - injeta como `Authorization: Bearer <token>`      │
+            │     na próxima chamada MCP                           │
+            └──────────────────────────────────────────────────────┘
+                              │
+                              │ Bearer <access_token>
+                              ▼
+            ┌──────────────────────────────────────────────────────┐
+            │                 MCP SERVER                           │
+            │   middleware:                                         │
+            │     1. extrai Bearer                                  │
+            │     2. PyJWT decode + valida sig contra JWKS         │
+            │     3. valida iss, aud, exp                           │
+            │     4. claims → request.state.claims                  │
+            │   tool:                                               │
+            │     get_http_request().state.claims → retorna dados  │
+            └──────────────────────────────────────────────────────┘
+```
+
+---
+
+## Inventário de cookies (frontend)
+
+Cookies setados pelo frontend pra carregar estado através do redirect cross-origin (Keycloak → Google → frontend).
+
+| Cookie | Setado em | Valor | Atributos | Lido em | Por quê |
+|--------|-----------|-------|-----------|---------|---------|
+| `user_id` | `POST /chat` (quando agente emite `adk_request_credential`) | O `user_id` do agente (passado pelo cliente JS) | `HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/` | `GET /validateUserId` | Google redireciona para `continue_uri` com `user_id_validation_state` mas NÃO carrega `user_id` original. Frontend precisa do `user_id` pra montar o body do `:finalize` |
+| `consent_nonce` | `POST /chat` (quando agente emite `adk_request_credential`) | Nonce extraído do `auth_config.oauth2.consent_nonce` da resposta do agente | `HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/` | `GET /validateUserId` | Mesmo motivo — `:finalize` exige `consentNonce` no body, e Google não devolve no redirect |
+
+**Por que `SameSite=Lax` e não `Strict`**: o popup OAuth segue cadeia cross-site (frontend → Keycloak → Google → frontend). Em `Strict`, cookies seriam descartados nessa cadeia. `Lax` permite navegação top-level cross-site preservando cookies (que é o caso de `window.open` + 302 redirects).
+
+**Por que `HttpOnly`**: nenhum código JS precisa ler esses cookies — só o servidor (FastAPI) lê. Reduz superfície de XSS.
+
+**Origem dos cookies importa**: cookies são per-origin. Frontend tem DUAS URLs Cloud Run (`<service>-<project_number>.<region>.run.app` e `<service>-<hash>-<region_short>.a.run.app`). Cookies setados num NÃO chegam no outro. Middleware `canonical_host_redirect` força tudo pra `CANONICAL_URL` (definido por env var no deploy) pra evitar split-brain.
+
+---
+
+## Cabeçalhos HTTP por hop
+
+Quem manda quais headers em cada chamada da arquitetura. Útil para debugar com `curl -v` ou logs de proxy.
+
+### Frontend → Agent Runtime (`POST /chat` interno → `:streamQuery`)
+
+| Header | Valor | Quem seta |
+|--------|-------|-----------|
+| `Authorization` | `Bearer <SA token>` | Frontend, via `google.auth.default()` (Cloud Run SA) |
+| `Content-Type` | `application/json` | Frontend |
+| `Accept` | (não setado — implícito SSE) | Frontend |
+
+Body: `{"class_method": "stream_query", "input": {"user_id", "session_id", "message"}}`
+
+### Browser → Frontend `/chat`
+
+| Header | Valor | Origem |
+|--------|-------|--------|
+| `Content-Type` | `application/json` | JS `fetch()` |
+| `Cookie` | (nenhum na primeira chamada; nas seguintes pode ter `user_id`, `consent_nonce` de chats anteriores) | Browser |
+
+### Frontend `/chat` response → Browser (quando needs_auth=true)
+
+| Header | Valor | Setado por |
+|--------|-------|-----------|
+| `Set-Cookie: user_id=<U>` | `HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/` | `chat()` handler |
+| `Set-Cookie: consent_nonce=<N>` | `HttpOnly; Secure; SameSite=Lax; Max-Age=600; Path=/` | `chat()` handler |
+| `Content-Type` | `application/json` | FastAPI |
+
+### Browser → Keycloak (`GET /auth` no popup)
+
+| Header | Valor | Origem |
+|--------|-------|--------|
+| `Referer` | URL do frontend (origin) | Browser |
+| (nenhum auth — usuário ainda não logou) | | |
+
+Query params: `client_id`, `redirect_uri`, `response_type=code`, `scope=openid profile email`, `state=<opaco>`
+
+### Keycloak → Google (`GET oauthcallback?code=…`)
+
+| Header | Valor | Origem |
+|--------|-------|--------|
+| (redirect 302, nenhum header customizado) | | |
+
+### Google → Frontend `/validateUserId`
+
+| Header | Valor | Origem |
+|--------|-------|--------|
+| `Cookie: user_id=<U>; consent_nonce=<N>` | (Browser anexa automaticamente — cookies da origin do frontend) | Browser |
+
+Query params: `user_id_validation_state=<opaco>`, `connector_name=projects/.../connectors/<name>`
+
+### Frontend → iamconnectorcredentials `:finalize`
+
+| Header | Valor | Setado por |
+|--------|-------|-----------|
+| `Authorization` | `Bearer <SA token>` | Frontend (ADC) |
+| `x-goog-user-project` | `${PROJECT_ID}` | Frontend (quota project) |
+| `Content-Type` | `application/json` | Frontend |
+
+Body: `{"userId": "<U>", "userIdValidationState": "<S>", "consentNonce": "<N>"}`
+
+### Agent → iamconnectorcredentials `:retrieveCredentials` (interno, via ADK)
+
+| Header | Valor | Setado por |
+|--------|-------|-----------|
+| `Authorization` | `Bearer <agent SPIFFE token>` (cert-bound DPoP) | ADK (google.auth) |
+| `x-goog-user-project` | `${PROJECT_ID}` | ADK |
+| `Content-Type` | `application/json` | google-cloud client lib |
+
+Body: `{"userId": "<user_id_from_agent>", "continueUri": "<frontend>/validateUserId", "requestedScopes": ["openid", "profile", "email"]}`
+
+### Agent → MCP server (tool call)
+
+| Header | Valor | Setado por |
+|--------|-------|-----------|
+| `Authorization` | `Bearer <keycloak access_token>` (vindo do vault) | ADK, automaticamente após `retrieveCredentials` |
+| `Content-Type` | `application/json` | MCP client |
+| `Accept` | `application/json, text/event-stream` | MCP client (Streamable HTTP) |
+| `Mcp-Session-Id` | (após `initialize`, vindo da resposta do server) | MCP client |
+
+Body: `{"jsonrpc": "2.0", "id": <N>, "method": "tools/call", "params": {"name": "<tool>", "arguments": {…}}}`
+
+### MCP server → Keycloak `/certs` (JWKS, em background)
+
+| Header | Valor | Setado por |
+|--------|-------|-----------|
+| (nenhum auth — JWKS é endpoint público) | | |
+
+PyJWKClient cacheia 1h; só refaz fetch quando o JWT tem um `kid` desconhecido.
+
+---
+
+## Shapes de request/response (JSON)
+
+### Frontend `POST /chat`
+
+**Request body**:
+```json
+{
+  "message": "Qual é o meu perfil no sistema?",
+  "session_id": "sess-abc123",
+  "user_id": "user-xyz789"
+}
+```
+
+**Response (caso 1 — agente respondeu direto, sem auth)**:
+```json
+{
+  "needs_auth": false,
+  "text": "Sua identidade no sistema é: …"
+}
+```
+
+**Response (caso 2 — agente requer consent)**:
+```json
+{
+  "needs_auth": true,
+  "auth_uri": "https://<keycloak>/realms/<R>/protocol/openid-connect/auth?client_id=…&redirect_uri=…&response_type=code&scope=openid+profile+email&state=ATOEr7…",
+  "function_call_id": "adk-abc-123-def",
+  "auth_config": { …auth_config payload do ADK… },
+  "consent_nonce": "fb9f8ff2-ca6e-4d4d-9a61-5a3109d3fead"
+}
+```
+
+### Frontend `POST /resume`
+
+**Request body**:
+```json
+{
+  "session_id": "sess-abc123",
+  "user_id": "user-xyz789",
+  "function_call_id": "adk-abc-123-def",
+  "auth_config": { …mesmo payload recebido no /chat… }
+}
+```
+
+**Response**: idêntica à `/chat` resposta (caso 1 ou 2).
+
+### Agent Runtime `POST :streamQuery?alt=sse`
+
+**Request body**:
+```json
+{
+  "class_method": "stream_query",
+  "input": {
+    "user_id": "user-xyz789",
+    "session_id": "sess-abc123",
+    "message": "Qual é o meu perfil no sistema?"
+  }
+}
+```
+
+**Response**: SSE stream. Cada linha:
+```
+data: {"content": {"parts": [{"function_call": {"name": "adk_request_credential", "id": "adk-abc-123", "args": {"auth_config": {…}}}}]}}
+
+data: {"content": {"parts": [{"text": "Sua identidade…"}]}}
+```
+
+### MCP server `POST /mcp` (método `tools/call`)
+
+**Request**:
+```http
+POST /mcp HTTP/1.1
+Authorization: Bearer eyJhbGciOiJSUzI1NiIs...
+Mcp-Session-Id: aaad62ff36c043e2b7743e82fa9cff94
+Content-Type: application/json
+Accept: application/json, text/event-stream
+
+{
+  "jsonrpc": "2.0",
+  "id": 5,
+  "method": "tools/call",
+  "params": {
+    "name": "get_my_profile",
+    "arguments": {}
+  }
+}
+```
+
+**Response (sucesso)**:
+```
+event: message
+data: {"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"{\"sub\":\"abc\",\"username\":\"alice\",\"email\":\"alice@example.com\",\"realm_roles\":[\"user\"]}"}],"isError":false}}
+```
+
+**Response (sem Bearer — middleware rejeita)**:
+```http
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: Bearer realm="oauth-3lo-mcp"
+Content-Type: application/json
+
+{"error": "missing_bearer"}
+```
+
+**Response (Bearer inválido)**:
+```http
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{"error": "invalid_token", "detail": "audience_mismatch (expected 'account')"}
+```
+
+### iamconnectorcredentials `POST :retrieveCredentials` (interno do agente)
+
+**Request body**:
+```json
+{
+  "userId": "user-xyz789",
+  "continueUri": "https://oauth-3lo-frontend-….run.app/validateUserId",
+  "requestedScopes": ["openid", "profile", "email"]
+}
+```
+
+**Response (caso 1 — token cached no vault)**:
+```json
+{
+  "name": "<lro-id>",
+  "done": true,
+  "response": {
+    "@type": "...RetrieveCredentialsResponse",
+    "token": "eyJhbGc...",
+    "header": {"name": "Authorization", "value": "Bearer eyJhbGc..."}
+  }
+}
+```
+
+**Response (caso 2 — precisa consent)**:
+```json
+{
+  "name": "<lro-id>",
+  "metadata": {
+    "@type": "...RetrieveCredentialsMetadata",
+    "uriConsentRequired": {
+      "authorizationUri": "https://<keycloak>/.../auth?...",
+      "consentNonce": "fb9f8ff2-ca6e-4d4d-9a61-5a3109d3fead"
+    }
+  }
+}
+```
+
+### iamconnectorcredentials `POST :finalize` (do frontend)
+
+**Request body**:
+```json
+{
+  "userId": "user-xyz789",
+  "userIdValidationState": "ATOEr7tIHGlN2vxkgW5Ax...",
+  "consentNonce": "fb9f8ff2-ca6e-4d4d-9a61-5a3109d3fead"
+}
+```
+
+**Response (sucesso)**:
+```json
+{
+  "name": "projects/.../operations/<op-id>",
+  "done": true
+}
+```
+
+---
+
 ## IAM
 
 ### Principal SPIFFE do agente
@@ -369,13 +717,21 @@ Se o refresh_token também expirou ou foi revogado, o connector retorna `uriCons
 ### Agente ADK (`agent/app/`)
 
 - **Stack**: ADK 1.27+ com extras `[a2a,agent-identity]` (a2a-sdk é dep transitiva mesmo sem usar A2A — importado pelo módulo `agent_registry`), `google-cloud-aiplatform[agent_engines]`, deployado via `agents-cli deploy --agent-identity`
-- **`agent.py`**: define `root_agent` (LlmAgent). O coração é a classe `_LazyMcpToolset`:
+- **`agent.py`** — wiring de tools combina **três técnicas** que juntas formam o padrão mínimo confiável:
+  1. **`_LazyMcpToolset`** — adia materialização do toolset até o primeiro `get_tools()`. Evita HTTPS em boot time (reduz overlap de threads → mitiga race do pyOpenSSL)
+  2. **Bypass de `registry.get_mcp_toolset`** — replica os internals do método pra passar `tool_name_prefix=None`. Sem isso, ADK força um prefix baseado em `displayName` (`oauth-3lo-mcp` → `oauth_3lo_mcp_*`) e Gemini reliably encurta o nome no function_call, fazendo o lookup falhar silenciosamente
+  3. **`auth_scheme` inline** — passa `GcpAuthProviderScheme(name=AUTH_PROVIDER_FULL_NAME, continue_uri=CONTINUE_URI)` direto, sem deixar ADK procurar o Binding em runtime. O Binding continua existindo no Registry (criado por `deploy.sh`, visível na Console, audited), só não é consultado pelo agente. Elimina a race do binding lookup
+- **Por que esse padrão e não outros**:
+  - Snippet "oficial" dos docs `registry.get_mcp_toolset(mcp_server_name=..., continue_uri=...)` + `LlmAgent(tools=[toolset])` PARECE simples, mas falha em produção porque Gemini emite o nome bare em vez do prefixado
+  - Subclasse de `AgentRegistry` com override de `get_mcp_toolset` aceitando `tool_name_prefix` seria mais limpo, mas exige duplicar TODA a lógica do método e mantê-la em sync com upstream
+  - Bypass localizado num `_LazyMcpToolset` isola a fragilidade num único ponto auditável
+- **`agent.py`** — implementação:
   ```python
   class _LazyMcpToolset(BaseToolset):
-      """Defers registry.get_mcp_toolset() until first get_tools() call."""
-      def __init__(self, mcp_server_name, continue_uri):
+      def __init__(self, mcp_server_name, auth_scheme, continue_uri):
           super().__init__()
           self._mcp_server_name = mcp_server_name
+          self._auth_scheme = auth_scheme
           self._continue_uri = continue_uri
           self._inner = None
 
@@ -383,18 +739,33 @@ Se o refresh_token também expirou ou foi revogado, o connector retorna `uriCons
           if self._inner is None:
               CredentialManager.register_auth_provider(GcpAuthProvider())
               registry = AgentRegistry(project_id=PROJECT_ID, location=REGISTRY_LOCATION)
-              self._inner = registry.get_mcp_toolset(
-                  mcp_server_name=self._mcp_server_name,
-                  continue_uri=self._continue_uri,
+              # Bypass get_mcp_toolset to set tool_name_prefix=None
+              server_details = registry.get_mcp_server(self._mcp_server_name)
+              endpoint_uri, _, _ = registry._get_connection_uri(
+                  server_details, protocol_binding=A2ATransport.jsonrpc
+              )
+              self._inner = AgentRegistrySingleMcpToolset(
+                  destination_resource_id=server_details.get("mcpServerId"),
+                  connection_params=StreamableHTTPConnectionParams(url=endpoint_uri),
+                  tool_name_prefix=None,
+                  auth_scheme=self._auth_scheme,
               )
           return self._inner
 
       async def get_tools(self, readonly_context=None):
           return await self._resolve().get_tools(readonly_context)
   ```
-  **Por que lazy?** `deploy.sh` cria o agente PRIMEIRO (`agents-cli deploy` precisa do source code), DEPOIS cria o Binding (que precisa do agent URN como source). Se o agente resolvesse o binding em module load, ele não acharia nada e cairia silenciosamente em `auth_scheme=None` — todas as chamadas de tool depois rejeitariam com 401. Lazy resolution se materializa no primeiro request de usuário, quando o binding já existe há tempos.
-  
-  **Nenhum `auth_scheme` inline** — quando omitido, `get_mcp_toolset` consulta o Registry, encontra o Binding cujo `target` = nosso MCP, e constrói um `GcpAuthProviderScheme` a partir do `auth_provider` declarado na binding. `continue_uri` precisa ser passado explicitamente (ADK não lê do binding).
+  Wiring no `_build_tools()`:
+  ```python
+  auth_scheme = GcpAuthProviderScheme(
+      name=AUTH_PROVIDER_FULL_NAME,
+      continue_uri=CONTINUE_URI,
+  )
+  toolset = _LazyMcpToolset(MCP_REGISTRY_NAME, auth_scheme, CONTINUE_URI)
+  root_agent = Agent(..., tools=[toolset])
+  ```
+- **Telemetria desabilitada** (`DISABLE_GCP_TELEMETRY=true` + `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=False`) — sem fonte concorrente de HTTPS, race do pyOpenSSL (dep transitiva de `google-auth[pyopenssl]`) raramente dispara
+- **Instruction sem nomes de tools** — schema do function_call é a única fonte de verdade pra Gemini. Listar nomes na instruction só atrapalha
 - **`agent_runtime_app.py`**: subclasses `AdkApp`. Configura `vertexai.init()`, telemetria (early-return se `DISABLE_GCP_TELEMETRY=true`), `GcsArtifactService` para sessions. Importa comentário documentando o block de pyOpenSSL caso telemetria seja reativada
 - **Instrução do agente**: lista os nomes exatos das tools (`get_my_profile`, `echo`) com aviso para não alterar — previne hallucination do LLM quando retoma após consent
 

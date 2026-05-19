@@ -151,8 +151,55 @@ O `deploy.sh` original concedia `roles/iamconnectors.user` ao **principalSet** (
 
 ### "Agent code com auth_scheme inline"
 - **Tentativa**: agente declarava `GcpAuthProviderScheme(name=..., continue_uri=...)` direto no código
-- **Resultado**: funcional, mas Console UI mostra Identity tab vazia. Acoplamento alto entre código e config
-- **Decisão final**: agente sem `auth_scheme` inline; Agent Registry Binding faz a resolução. Console UI passa a listar tudo
+- **Resultado intermediário**: funcional, mas Console UI mostra Identity tab vazia. Acoplamento alto entre código e config
+- **Decisão intermediária**: agente sem `auth_scheme` inline; Agent Registry Binding faz a resolução. Console UI passa a listar tudo
+- **Decisão REVERTIDA na rodada 3 (ver abaixo)**: voltamos pra `auth_scheme` inline porque o lookup do Binding em runtime tinha race condition (agent boota antes do binding existir) E não eliminava o problema do `tool_name_prefix` forçado. Binding continua sendo criado por `deploy.sh` pra aparecer na Console; agente apenas não lê
+
+---
+
+## Terceira rodada (simplificação do wiring de tools)
+
+35. ❌ Sintoma persistente: Frontend retornava `(empty response)` consistentemente mesmo com Binding-resolved auth + LazyToolset funcionando. Tornou-se evidente que o problema era **tool name mismatch**, não auth/binding
+36. ❌ `AgentRegistry.get_mcp_toolset(mcp_server_name)` **força** `tool_name_prefix=<sanitized displayName>` no toolset (código fonte: `agent_registry.py` linha 315 + 368). DisplayName `oauth-3lo-mcp` → tools viram `oauth_3lo_mcp_get_my_profile`, `oauth_3lo_mcp_echo`. Não existe flag para desabilitar nem keyword arg
+37. ❌ Gemini 3 **consistentemente encurta** o nome — vimos LLM emitir `get_my_profile` (bare) em vez de `oauth_3lo_mcp_get_my_profile` (do schema). Função schema enviada pro modelo tem o nome prefixado, mas Gemini prefere a forma semântica natural. Testamos com renomear displayName pra `identity` (prefix vira `identity_`); LLM continuou emitindo `get_my_profile`. **Não há instruction que segure essa preferência do modelo**
+38. ✅ Solução: bypassar `get_mcp_toolset` e construir `AgentRegistrySingleMcpToolset` direto com `tool_name_prefix=None`. ~30 linhas de código que replicam internals do upstream
+39. ❌ Tentativa de `sys.modules["urllib3.contrib.pyopenssl"] = None` (block agressivo) — quebra mTLS do google-auth: `ModuleNotFoundError: import of urllib3.contrib.pyopenssl halted; None in sys.modules`
+40. ❌ Tentativa de stub no `sys.modules` com `inject_into_urllib3 = lambda: None` — quebra mTLS em path diferente: `AttributeError: 'SSLContext' object has no attribute '_ctx'` (google-auth espera pyOpenSSL semantics no SSLContext pra cert-bound token handling)
+41. ✅ Aceitar: pyOpenSSL é dep transitiva necessária pra mTLS do Agent Identity. **Não dá pra neutralizar**. Mitigação: manter telemetria OFF (sem fonte concorrente de HTTPS, race do pyOpenSSL raramente dispara) + LazyToolset (defer materialização → ainda menos overlap concorrente em boot)
+42. ✅ **Combinação final que funciona**:
+    1. `_LazyMcpToolset` defere materialização até primeiro request
+    2. Bypass de `get_mcp_toolset` para forçar `tool_name_prefix=None`
+    3. `auth_scheme` passado inline (sem binding lookup → sem race binding)
+    4. SEM stub de pyOpenSSL (deixa mTLS funcionar normalmente)
+    5. Telemetria GCP OFF (`DISABLE_GCP_TELEMETRY=true` + `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=False`)
+43. ✅ Validação: dois requests consecutivos com user_ids diferentes ambos retornaram `needs_auth=true` com auth_uri Keycloak. Estável
+
+---
+
+## Conclusões da rodada 3
+
+### O `tool_name_prefix` forçado é o maior atrito do Agent Registry pra MCP
+
+Os 3 docs oficiais (`resolve-endpoints-and-build-orchestrators`, `search-agents-and-tools`, `authenticate-toolsets`) mostram o snippet `registry.get_mcp_toolset(mcp_server_name=...)` como canônico, mas **nenhum** menciona o prefix forçado nem fornece workaround. Bug ou feature, a única solução prática é replicar os internals do método e passar `tool_name_prefix=None`.
+
+A demo `mcp-discovery-demo` (no root, não experimental) usa o mesmo bypass. É **o padrão de fato** neste repo apesar de não ser idiomático per docs oficiais.
+
+### Gemini 3 é altamente opinated sobre nomes de tools
+
+Tentar instruir o LLM a usar nomes prefixados foi inútil. Ele consistentemente "encurta" pro nome semântico que reconhece (`get_my_profile`, não `oauth_3lo_mcp_get_my_profile`). A única forma confiável de fazer a tool ser chamável é **dar a ela o nome exato que o LLM vai emitir**. Renomear `displayName` no Registry pra algo mais natural não basta — Gemini prefere encurtar até quando o prefix é curto e semântico.
+
+### Binding tem valor operacional, não funcional
+
+Originalmente quisemos usar `auth_scheme=None` + Binding-resolved auth pelo argumento de decoupling: agente não sabe o connector, Binding diz. Mas:
+- Tem race condition com criação do Binding (agente boota antes)
+- Não simplifica o código (lazy ainda necessário pelo race)
+- Tem o mesmo problema de tool_name_prefix
+
+Voltamos pra `auth_scheme` inline. O Binding continua sendo criado por `deploy.sh` pra **valor operacional**: aparece na Console (tab Identity do agente), audit logs registram, ferramentas externas podem inspecionar. Mas o agente não depende dele em runtime.
+
+### pyOpenSSL é dívida da plataforma — não dá pra neutralizar
+
+Tentamos 3 estratégias diferentes de bloquear pyOpenSSL (null sys.modules, stub completo, stub atributo). Todas quebram caminhos legítimos de mTLS que `google-auth[pyopenssl]` (dep dura de `google-adk`) usa. A única mitigação viável é **reduzir concorrência HTTPS** ao mínimo, principalmente desligando exporters de telemetria. Em produção, ligar telemetria de volta exige aceitar reinícios ocasionais do runner thread (raro mas existe).
 
 ---
 
