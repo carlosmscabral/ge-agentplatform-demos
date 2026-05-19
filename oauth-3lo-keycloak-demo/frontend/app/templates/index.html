@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OAuth 3LO Keycloak — demo</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
+    h1 { margin-bottom: 0.25rem; }
+    .meta { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .meta code { background: rgba(127,127,127,0.15); padding: 1px 6px; border-radius: 4px; }
+    .log { border: 1px solid rgba(127,127,127,0.3); border-radius: 8px; padding: 1rem; min-height: 280px; max-height: 480px; overflow-y: auto; white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.92rem; }
+    .row { display: flex; gap: 0.5rem; margin-top: 1rem; }
+    textarea { flex: 1; padding: 0.6rem; border-radius: 8px; border: 1px solid rgba(127,127,127,0.3); font-family: inherit; font-size: 1rem; min-height: 60px; }
+    button { padding: 0.6rem 1.2rem; border-radius: 8px; border: 0; background: #4f46e5; color: white; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .user { color: #4f46e5; font-weight: 600; }
+    .agent { color: #16a34a; font-weight: 600; }
+    .system { color: #d97706; font-weight: 600; }
+    .warn { background: rgba(217, 119, 6, 0.15); padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>OAuth 3LO Keycloak — demo</h1>
+  <p class="meta">
+    project=<code>{{ project_id }}</code>
+    region=<code>{{ region }}</code>
+    auth_provider=<code>{{ auth_provider_short }}</code>
+  </p>
+
+  {% if not agent_configured %}
+  <div class="warn">⚠ <code>AGENT_ENGINE_ID</code> is empty — the frontend is running as a stub. Wait for <code>deploy.sh</code> to redeploy it with the agent reference.</div>
+  {% endif %}
+
+  <div id="log" class="log"></div>
+
+  <div class="row">
+    <textarea id="prompt" placeholder="Ex.: qual meu perfil no sistema?"></textarea>
+    <button id="send">Enviar</button>
+  </div>
+
+  <script>
+    const log = document.getElementById('log');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn = document.getElementById('send');
+
+    // Persist a session/user pair for the lifetime of this tab.
+    const sessionId = 'sess-' + Math.random().toString(36).slice(2, 12);
+    const userId = 'user-' + Math.random().toString(36).slice(2, 12);
+
+    function append(kind, text) {
+      const line = document.createElement('div');
+      line.innerHTML = `<span class="${kind}">${kind}:</span> ${text}`;
+      log.appendChild(line);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    let pendingAuth = null; // { function_call_id, auth_config }
+
+    async function send(message) {
+      append('user', escapeHtml(message));
+      sendBtn.disabled = true;
+      try {
+        const resp = await fetch('/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ message, session_id: sessionId, user_id: userId }),
+        });
+        const data = await resp.json();
+        if (data.needs_auth) {
+          pendingAuth = { function_call_id: data.function_call_id, auth_config: data.auth_config };
+          append('system', 'Consent required — opening Keycloak in a popup…');
+          const popup = window.open(data.auth_uri, 'kc_popup', 'width=520,height=720');
+          // Detect popup close via polling. postMessage doesn't survive the
+          // cross-origin redirect chain (Chrome's COOP clears window.opener
+          // after popup navigates through Keycloak + Google's domains).
+          // popup.closed is one of the few cross-origin-readable properties.
+          const closeTimer = setInterval(() => {
+            try {
+              if (popup && popup.closed) {
+                clearInterval(closeTimer);
+                resume();
+              }
+            } catch (e) { /* ignore COOP read errors */ }
+          }, 500);
+        } else {
+          append('agent', escapeHtml(data.text));
+        }
+      } catch (e) {
+        append('system', 'error: ' + escapeHtml(String(e)));
+      } finally {
+        sendBtn.disabled = false;
+      }
+    }
+
+    async function resume() {
+      if (!pendingAuth) return;
+      append('system', 'Consent recorded, resuming conversation…');
+      try {
+        const resp = await fetch('/resume', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            session_id: sessionId,
+            user_id: userId,
+            function_call_id: pendingAuth.function_call_id,
+            auth_config: pendingAuth.auth_config,
+          }),
+        });
+        const data = await resp.json();
+        pendingAuth = null;
+        if (data.needs_auth) {
+          append('system', 'Agent still needs consent — try again.');
+        } else {
+          append('agent', escapeHtml(data.text));
+        }
+      } catch (e) {
+        append('system', 'resume error: ' + escapeHtml(String(e)));
+      }
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
+    }
+
+    window.addEventListener('message', (ev) => {
+      if (ev?.data?.type === 'oauth-3lo-consent-done') resume();
+    });
+
+    sendBtn.addEventListener('click', () => {
+      const message = promptEl.value.trim();
+      if (message) {
+        promptEl.value = '';
+        send(message);
+      }
+    });
+    promptEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendBtn.click();
+      }
+    });
+  </script>
+</body>
+</html>

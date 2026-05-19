@@ -1,0 +1,20 @@
+[project]
+name = "oauth-3lo-frontend"
+version = "0.1.0"
+description = "Minimal FastAPI chat UI that drives the Agent Identity 3LO consent handshake"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.110,<1",
+    "uvicorn>=0.29,<1",
+    "jinja2>=3.1,<4",
+    "httpx>=0.27,<1",
+    "google-auth>=2.30,<3",
+    "google-cloud-aiplatform[agent-engines]>=1.130.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]

@@ -1,0 +1,40 @@
+{
+  "tools": [
+    {
+      "name": "get_my_profile",
+      "description": "Return the calling user's Keycloak profile (claims from the validated JWT): subject, username, email, and realm roles. Use this to confirm the OAuth 3LO consent has propagated and the user identity is reaching the MCP server.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Get my Keycloak profile",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    },
+    {
+      "name": "echo",
+      "description": "Echo back a message together with the authenticated user's subject claim. Useful to confirm that auth context is present without exposing all claims.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Text to echo back."
+          }
+        },
+        "required": ["message"],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "title": "Echo with user context",
+        "readOnlyHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      }
+    }
+  ]
+}
