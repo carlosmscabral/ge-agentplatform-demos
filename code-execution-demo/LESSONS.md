@@ -269,6 +269,25 @@ pelo usuário A ficam visíveis para o usuário B). Para esta demo:
 Para produção multi-tenant: combinar B + C — pre-create por user (ID na
 display_name) + cron que limpa sandboxes idle > N horas.
 
+### Gotcha pego durante validação: agente quebra silenciosamente após TTL expirar
+
+Com `SANDBOX_TTL=3600s` (nossa primeira tentativa), descobrimos
+empiricamente que **após a TTL expirar, o `SANDBOX_RESOURCE_NAME` env var
+aponta para um recurso 404 e `execute_code` falha**. O executor da ADK em
+Modo 1 NÃO tem fallback de re-criação (ao contrário de Modo 3, que
+re-cria se `session.state['sandbox_name']` aponta para um sandbox
+não-RUNNING).
+
+**Fix prático**: re-rodar `./deploy.sh` — é idempotente:
+- Step 5 lista sandboxes existentes sob o host, não encontra match → cria novo
+- Step 6 re-deploya o agente com `SANDBOX_RESOURCE_NAME=<novo>`
+
+**Default bumpado para 24h** (em vez de 1h) para reduzir frequência de
+redeploy em demos. Para CI/CD ou produção, opções:
+1. Cron que roda `./deploy.sh` periodicamente (a cada N horas)
+2. Subclassar `AgentEngineSandboxCodeExecutor` para fallback-recriar em 404
+3. Voltar para Modo 3 + cleanup cron (limpa por update_time, não TTL)
+
 ## 10. Outras decisões menores
 
 ### Testes integration do scaffold removidos

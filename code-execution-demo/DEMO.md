@@ -11,6 +11,53 @@ export ORCH_URL="https://us-central1-aiplatform.googleapis.com/v1beta1/projects/
 cd analyst-agent
 ```
 
+## ⚠️ Pre-flight check — sandbox TTL
+
+O sandbox compartilhado é criado com TTL configurável (`SANDBOX_TTL`,
+default **24h** — veja `.env.template`). Após expirar, o agente quebra
+com 404 ao tentar executar código.
+
+**Antes de cada demo, faça este check** (5 segundos):
+
+```bash
+# 1. Carregue o estado salvo pelo último deploy
+source .deploy-state    # define SANDBOX_RESOURCE, SANDBOX_HOST_RESOURCE, etc.
+
+# 2. Verifique se o sandbox ainda está vivo + quanto tempo resta
+cd analyst-agent
+uv run python - <<EOF
+from datetime import datetime, timezone
+import vertexai
+c = vertexai.Client(project="<PROJECT_ID>", location="us-central1",
+                    http_options={"api_version": "v1beta1"})
+try:
+    sb = c.agent_engines.sandboxes.get(name="${SANDBOX_RESOURCE}")
+    remaining = sb.expire_time - datetime.now(timezone.utc)
+    print(f"state:   {sb.state}")
+    print(f"expire:  {sb.expire_time}")
+    print(f"remain:  {remaining}")
+    if remaining.total_seconds() < 900:  # < 15 min
+        print("⚠️  POUCO TEMPO — re-deploy antes da demo")
+except Exception as e:
+    print(f"❌ NÃO ENCONTRADO ({e.__class__.__name__}) — re-deploy obrigatório")
+EOF
+```
+
+**Se o sandbox estiver morto ou com pouco tempo**, simplesmente rode
+`./deploy.sh` de novo. É idempotente:
+
+- **Step 5** detecta sandbox ausente/expirado → cria um novo (TTL renovado)
+- **Step 6** redeploya o agente injetando o novo `SANDBOX_RESOURCE_NAME`
+- Tempo total: ~5-10 min (sandbox-host é reusado, só o orquestrador é
+  atualizado)
+
+> 📌 **Para demos importantes**: rode `./deploy.sh` **15 min antes** da
+> apresentação. Isso garante TTL fresca + warm-up do orquestrador.
+
+> 🔁 **Para uso recorrente em produção**: configure `SANDBOX_TTL=604800s`
+> (7 dias) ou rode `./deploy.sh` via Cloud Scheduler periodicamente.
+> Documentado em `LESSONS.md §11`.
+
 ## Access methods
 
 | Método | Comando / link |
