@@ -227,6 +227,48 @@ arr[:] = 1.0   # força allocation de páginas físicas
 
 Ou use `np.random.randn(N)` que aloca + escreve.
 
+## 11. TTL eterno do sandbox (1 ano) — fix com pre-create
+
+**Observação**: o `AgentEngineSandboxCodeExecutor` da ADK, no caminho de
+**Modo 3** (lazy-create), hardcoda `ttl='31536000s'` (1 ano) no
+`agent_engines.sandboxes.create()`. Validado lendo o source (linhas 152-165
+de `agent_engine_sandbox_code_executor.py`) e empiricamente — listei
+nosso sandbox e `expire_time` ficou em `2027-05-19` (exatamente 1 ano após
+criação).
+
+**Consequência**: cada sessão deixa um sandbox vivo por 1 ano. Em demo é OK;
+em produção é desastre de cost (sandboxes idle consumindo recursos).
+
+**Por que não dá pra patchar pós-criação**: a SDK
+(`client.agent_engines.sandboxes`) não expõe `update()` nem `patch()`.
+Métodos disponíveis: `create / delete / execute_code / get / list /
+send_command / generate_access_token / generate_browser_ws_headers`.
+TTL é imutável após criação.
+
+**Fix escolhido — Opção B (pre-create)**: `deploy.sh` Step 5 pré-cria UM
+sandbox com `ttl=${SANDBOX_TTL}` (default 3600s = 1h) e injeta seu
+resource name como `SANDBOX_RESOURCE_NAME` env var. O `agent.py` usa Modo 1
+do executor (`sandbox_resource_name=...`) que reusa esse sandbox em TODAS
+as sessões.
+
+**Trade-off aceito**: state é compartilhado entre sessões (variáveis criadas
+pelo usuário A ficam visíveis para o usuário B). Para esta demo:
+- ✅ Lifetime controlado (1h em vez de 1 ano)
+- ✅ Idempotente: se sandbox existe + RUNNING + expiry > now+5min, reusa
+- ✅ Refresh automático: `execute_code` reseta TTL (cada chamada estende +1h)
+- ⚠️ Sem isolamento por usuário — aceitável para demo single-tenant
+
+**Alternativas consideradas**:
+
+| Opção | Trade-off |
+|---|---|
+| A. Subclassar `AgentEngineSandboxCodeExecutor` e copiar `execute_code` com TTL custom | ~80 linhas de código duplicado; frágil contra updates da ADK |
+| **B. Pre-create + Modo 1 (escolhida)** | Simples; state shared entre sessões |
+| C. Cleanup job (cron) que deleta sandboxes idle | Mais complexo (Cloud Scheduler + Cloud Function); preserva isolamento |
+
+Para produção multi-tenant: combinar B + C — pre-create por user (ID na
+display_name) + cron que limpa sandboxes idle > N horas.
+
 ## 10. Outras decisões menores
 
 ### Testes integration do scaffold removidos

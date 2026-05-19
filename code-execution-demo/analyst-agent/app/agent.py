@@ -3,18 +3,22 @@
 Architecture:
   * The agent uses Gemini to plan, then generates Python code that runs in
     an Agent Engine sandbox via AgentEngineSandboxCodeExecutor. State
-    (Python variables, DataFrames, plots) persists across turns within a
-    single VertexAI session.
-  * The sandbox is hosted under a DEDICATED Reasoning Engine — the
-    "sandbox host" — pre-created by deploy.sh Step 4. Its full resource
-    name (`projects/{P}/locations/{L}/reasoningEngines/{ID}`) is injected
-    via env var AGENT_ENGINE_RESOURCE_NAME.
-  * If the env var is unset, the executor falls back to auto-creating an
-    Agent Engine on first execute_code() call (Case 2 in the executor
-    source). We avoid that path in production deploys to prevent
-    proliferation of orphan Reasoning Engines.
+    (Python variables, DataFrames, plots) persists within the sandbox.
+  * Wiring is controlled by two env vars (deploy.sh injects both):
+      - SANDBOX_RESOURCE_NAME: full sandbox path (Modo 1 of the executor).
+        When set, the agent uses this PRE-CREATED sandbox for ALL sessions.
+        deploy.sh pre-creates it with a SHORT TTL (default 3600s) — gives
+        lifecycle control, avoids the executor's hardcoded 1-year default.
+        Trade-off: state is shared across sessions (no per-user isolation).
+      - AGENT_ENGINE_RESOURCE_NAME: sandbox-host RE path (Modo 3, fallback).
+        When SANDBOX_RESOURCE_NAME is unset, the executor lazy-creates one
+        sandbox per session inside this host RE — each with TTL=1 year
+        (hardcoded by the SDK).
+  * If both env vars are unset, the executor auto-creates a NEW Agent
+    Engine on first execute_code() (Case 2). We avoid that path in
+    production deploys to prevent orphan Reasoning Engines.
 
-See ARCHITECTURE.md §2 for the full sandbox model and IAM requirements.
+See ARCHITECTURE.md §2 + LESSONS.md for sandbox lifecycle trade-offs.
 """
 from __future__ import annotations
 
@@ -33,13 +37,18 @@ os.environ.setdefault("GOOGLE_CLOUD_PROJECT", _project_id or "")
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "True")
 
+_SANDBOX = os.environ.get("SANDBOX_RESOURCE_NAME", "").strip() or None
 _AGENT_ENGINE = os.environ.get("AGENT_ENGINE_RESOURCE_NAME", "").strip() or None
-if _AGENT_ENGINE:
-    logger.info("Sandbox host (Agent Engine): %s", _AGENT_ENGINE)
+
+if _SANDBOX:
+    logger.info("Using PRE-CREATED sandbox (Modo 1): %s", _SANDBOX)
+elif _AGENT_ENGINE:
+    logger.info("Lazy-creating sandboxes under host RE (Modo 3): %s", _AGENT_ENGINE)
 else:
     logger.warning(
-        "AGENT_ENGINE_RESOURCE_NAME not set — executor will auto-create a "
-        "new Agent Engine on first code execution (not recommended for prod)"
+        "Neither SANDBOX_RESOURCE_NAME nor AGENT_ENGINE_RESOURCE_NAME set — "
+        "executor will auto-create a new Agent Engine on first execute_code "
+        "(not recommended for prod)."
     )
 
 
@@ -93,6 +102,9 @@ root_agent = Agent(
     model=os.environ.get("GEMINI_MODEL", "gemini-3-flash-preview"),
     instruction=_INSTRUCTION,
     code_executor=AgentEngineSandboxCodeExecutor(
+        # Modo 1 (preferred): pre-created sandbox with controlled TTL.
+        # If unset, falls through to Modo 3 (lazy-create under host RE).
+        sandbox_resource_name=_SANDBOX,
         agent_engine_resource_name=_AGENT_ENGINE,
     ),
 )

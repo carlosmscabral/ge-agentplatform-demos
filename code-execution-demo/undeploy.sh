@@ -18,6 +18,7 @@ echo "╚═══════════════════════�
 
 # ─── Load deploy state ────────────────────────────────────────────────────────
 SANDBOX_HOST_RESOURCE=""
+SANDBOX_RESOURCE=""
 ORCH_RESOURCE=""
 ORCH_SPIFFE=""
 if [ -f "${SCRIPT_DIR}/.deploy-state" ]; then
@@ -45,6 +46,27 @@ if [ -n "${ORCH_RESOURCE}" ]; then
     rm -f "${META}"
 else
     echo "  (no orchestrator resource recorded — nothing to delete)"
+fi
+
+# ─── Step 1.5: Delete the pre-created shared sandbox ─────────────────────────
+echo ""
+echo ">>> Step 1.5/5: Deleting pre-created shared sandbox (if any)..."
+if [ -n "${SANDBOX_RESOURCE}" ]; then
+    uv --directory "${SCRIPT_DIR}/analyst-agent" run python - <<EOF 2>&1 | tail -3
+import vertexai
+client = vertexai.Client(
+    project="${PROJECT_ID}",
+    location="${REGION}",
+    http_options={"api_version": "v1beta1"},
+)
+try:
+    client.agent_engines.sandboxes.delete(name="${SANDBOX_RESOURCE}")
+    print("    ✓ shared sandbox deleted")
+except Exception as e:
+    print(f"    (delete failed or not found: {e})")
+EOF
+else
+    echo "  (no shared sandbox recorded — the host RE delete below will sweep it)"
 fi
 
 # ─── Step 2: Delete sandbox-host Reasoning Engine ────────────────────────────
