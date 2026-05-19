@@ -1,25 +1,19 @@
+# NOTE: do NOT call urllib3.contrib.pyopenssl.extract_from_urllib3() here.
+# It DOES fix the
+#   ValueError: Context has already been used to create a Connection
+# race in the iamconnectorcredentials path, but google-auth's
+# `_MutualTlsAdapter.__init__` (google/auth/transport/requests.py:223)
+# reaches into `ctx_poolmanager._ctx.use_certificate(x509)` — and `_ctx`
+# only exists on pyOpenSSL's PyOpenSSLContext. Removing the injection
+# makes urllib3 use stdlib ssl.SSLContext (no `_ctx`), which crashes
+# the iamconnectorcredentials Client constructor with
+#   AttributeError: 'SSLContext' object has no attribute '_ctx'
+# during mTLS adapter init — long before the thread race would fire.
+# So the race remains; mitigation is operational (keep-warm pings, or
+# downgrade google-auth to a version that doesn't pre-init mTLS adapters).
 import logging
 import os
 from typing import Any
-
-# NOTE on pyOpenSSL / telemetry interaction (see ARCHITECTURE.md for full story):
-# google-adk → google-auth[pyopenssl] pulls pyOpenSSL into the venv, and both
-# `requests/__init__.py:138` and `google/auth/transport/requests.py:216` auto-call
-# `urllib3.contrib.pyopenssl.inject_into_urllib3()` on import. The resulting
-# pyOpenSSL SSL.Context is NOT thread-safe. Under concurrent HTTPS — agent
-# calling iamconnectorcredentials WHILE the OTEL exporter ships a span to
-# Cloud Trace/Logging — pyOpenSSL raises
-#   ValueError: Context has already been used to create a Connection
-# which ADK swallows as RuntimeError("Failed to retrieve credential …").
-#
-# This demo opts OUT of GCP telemetry to remove the concurrent-HTTPS race
-# (telemetry isn't the focus here — OAuth is). `setup_telemetry()` honors
-# DISABLE_GCP_TELEMETRY=true and returns early.
-#
-# If you ever need to re-enable telemetry here, you also need to block the
-# pyOpenSSL inject — uncomment the two lines below BEFORE any other import:
-#   import sys
-#   sys.modules["urllib3.contrib.pyopenssl"] = None  # type: ignore[assignment]
 
 import vertexai
 from dotenv import load_dotenv

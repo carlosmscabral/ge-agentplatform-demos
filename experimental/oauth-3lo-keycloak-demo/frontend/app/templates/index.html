@@ -45,9 +45,18 @@
     const promptEl = document.getElementById('prompt');
     const sendBtn = document.getElementById('send');
 
-    // Persist a session/user pair for the lifetime of this tab.
+    // Session is per-tab; user is FIXED for the whole demo.
+    //
+    // Why fixed user_id: this demo simulates a "single signed-in user" — a real
+    // app would derive user_id from its own login (cookie, JWT, IDP). Random
+    // per-tab user_ids made it easy to demonstrate isolation but caused the
+    // post-consent credential lookup in the Agent Identity vault to miss
+    // intermittently (a token finalized as user-XYZ does not appear queryable
+    // as user-XYZ on the very next agent call unless the vault has fully
+    // propagated). A stable user_id reuses an already-warm vault entry across
+    // tabs / browsers — closer to how a real app behaves and removes the race.
     const sessionId = 'sess-' + Math.random().toString(36).slice(2, 12);
-    const userId = 'user-' + Math.random().toString(36).slice(2, 12);
+    const userId = 'demo-user';
 
     function append(kind, text) {
       const line = document.createElement('div');

@@ -1,5 +1,21 @@
 # OAuth 3LO + Keycloak Demo
 
+> **⚠ STATUS: EXPERIMENTAL — falha determinística pós-idle do Reasoning Engine.**
+> Esta demo **funciona end-to-end numa janela de ~5 min após deploy fresco** (popup
+> Keycloak abre, consent é registrado, agente lê o token do vault, MCP retorna
+> claims). Depois de ~5–15 min de idle, toda chamada subsequente quebra
+> deterministicamente com `ValueError: Context has already been used to create a
+> Connection` no caminho `agent → iamconnectorcredentials → urllib3/pyOpenSSL`,
+> e o popup deixa de abrir. **Não há fix code-level**: pyOpenSSL é dep dura
+> de `google-auth[pyopenssl]` para mTLS, mas a `PyOpenSSLContext` não é
+> thread-safe; e neutralizar pyOpenSSL quebra o `_MutualTlsAdapter` do
+> google-auth (que assume `_ctx` da PyOpenSSLContext). Detalhes completos +
+> 4 tentativas de fix falhadas em [LESSONS.md "Quarta rodada"](LESSONS.md).
+>
+> Demo mantida aqui como **referência arquitetural** do padrão Agent Identity
+> 3LO + Registry Binding + SPIFFE + FastMCP com JWT middleware. Para usá-la
+> ao vivo, redeploy imediatamente antes da apresentação.
+
 Demonstra **Agent Identity 3-Legged OAuth** ([docs](https://docs.cloud.google.com/iam/docs/auth-with-3lo), Preview) end-to-end: um agente ADK em Agent Runtime autentica num servidor MCP protegido por **Keycloak** *em nome do usuário final*. O token do usuário fica num cofre gerenciado pelo Google — o código do agente nunca toca o segredo. Auth provider e MCP são amarrados via **Agent Registry Binding**, então não há nada de OAuth no código do agente.
 
 📐 **Arquitetura detalhada (PT-BR)**: [ARCHITECTURE.md](ARCHITECTURE.md)

@@ -293,16 +293,20 @@ async def chat(req: ChatRequest) -> JSONResponse:
     # b/512459826): retrieveCredentials raises ValueError("Context has already
     # been used to create a Connection") which ADK swallows as
     # RuntimeError("Failed to retrieve credential …"), the runner thread dies
-    # and the SSE stream closes empty. Retry once on empty response — second
-    # attempt usually wins because the racing client has finished.
+    # and the SSE stream closes empty. The race fires more on subsequent
+    # requests (connection pool warm). Retry with exponential backoff: the
+    # racing client eventually finishes and the pool stabilizes.
+    import asyncio
     result = await _try_chat(req)
-    if not result.get("needs_auth") and not result.get("text"):
+    backoffs = [1, 3, 6]  # 3 retries, total wait up to 10s
+    for attempt, delay in enumerate(backoffs, start=1):
+        if result.get("needs_auth") or result.get("text"):
+            break
         logger.warning(
-            "Empty agent response for user=%s session=%s — retrying once",
-            req.user_id, req.session_id,
+            "Empty agent response for user=%s session=%s — retry %d/%d after %ds",
+            req.user_id, req.session_id, attempt, len(backoffs), delay,
         )
-        import asyncio
-        await asyncio.sleep(2)
+        await asyncio.sleep(delay)
         result = await _try_chat(req)
 
     if result.get("needs_auth"):

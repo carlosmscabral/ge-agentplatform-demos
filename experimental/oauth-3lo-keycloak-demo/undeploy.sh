@@ -71,19 +71,17 @@ fi
 # ─── Step 3: Delete MCP server from Agent Registry ──────────────────────────
 echo ""
 echo ">>> Step 3/6: Deleting MCP server from Agent Registry…"
-MCP_REGISTRY_NAME=$(gcloud alpha agent-registry mcp-servers list \
-    --location="${REGION}" --project="${PROJECT_ID}" \
-    --filter="displayName='${MCP_REGISTRY_DISPLAY_NAME}'" \
-    --format='value(name)' 2>/dev/null | head -1)
-SERVICE_REGISTRY_NAME=$(gcloud alpha agent-registry services list \
-    --location="${REGION}" --project="${PROJECT_ID}" \
-    --filter="displayName='${MCP_REGISTRY_DISPLAY_NAME}'" \
-    --format='value(name)' 2>/dev/null | head -1)
-if [ -n "${SERVICE_REGISTRY_NAME}" ]; then
-    gcloud alpha agent-registry services delete "${SERVICE_REGISTRY_NAME}" \
-        --project="${PROJECT_ID}" --quiet 2>/dev/null \
+# Look up by the service NAME (which equals MCP_REGISTRY_DISPLAY_NAME at create
+# time) rather than the mirror's displayName field. The mirror's displayName
+# can drift across re-deploys if a prior deploy used a different value, so
+# filtering by displayName misses the orphan and leaves it behind. The service
+# name in agent-registry services/ is the stable identifier.
+if gcloud alpha agent-registry services describe "${MCP_REGISTRY_DISPLAY_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
+    gcloud alpha agent-registry services delete "${MCP_REGISTRY_DISPLAY_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet 2>/dev/null \
+        && echo "    Removed agent-registry service ${MCP_REGISTRY_DISPLAY_NAME}" \
         || echo "    Registry service delete failed (may not be supported)."
-    echo "    Removed ${SERVICE_REGISTRY_NAME}"
 else
     echo "    No MCP registry entry found, skipping."
 fi

@@ -137,8 +137,16 @@ REGISTRY_DESCRIPTION="[tag:identity] [tag:oauth] [tag:keycloak] [tag:3lo] [domai
 if gcloud alpha agent-registry services describe "${MCP_REGISTRY_DISPLAY_NAME}" \
         --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
     echo "    Service exists — updating…"
+    # IMPORTANT: --display-name MUST be passed on update too. The mcp-servers/
+    # mirror takes displayName from the service at create time and the API
+    # does NOT re-sync it on later updates unless explicitly set. If a previous
+    # deploy created the service with a different displayName, omitting it
+    # here leaves the mirror's displayName stuck on the old value — and the
+    # `mcp-servers list --filter=displayName=...` calls below silently return
+    # empty, leading to a deploy with no Agent Registry Binding.
     gcloud alpha agent-registry services update "${MCP_REGISTRY_DISPLAY_NAME}" \
         --location="${REGION}" --project="${PROJECT_ID}" \
+        --display-name="${MCP_REGISTRY_DISPLAY_NAME}" \
         --description="${REGISTRY_DESCRIPTION}" \
         --interfaces="protocolBinding=jsonrpc,url=${MCP_URL}/mcp" \
         --mcp-server-spec-type=tool-spec \
@@ -339,62 +347,106 @@ json.dump(data, open('${SCRIPT_DIR}/deployment_metadata.json', 'w'), indent=2)
 echo ""
 echo ">>> Step 10/12: Creating Agent Registry Binding (agent ⇄ MCP ⇄ auth_provider)…"
 
-# Resolve URNs (these only exist after the agent and MCP are registered)
-AGENT_URN=$(gcloud alpha agent-registry agents list \
-    --location="${REGION}" --project="${PROJECT_ID}" \
-    --filter="agentId:'reasoningEngines:${AGENT_ENGINE_ID}'" \
-    --format='value(agentId)' 2>/dev/null | head -1)
-MCP_URN=$(gcloud alpha agent-registry mcp-servers list \
-    --location="${REGION}" --project="${PROJECT_ID}" \
-    --filter="displayName='${MCP_REGISTRY_DISPLAY_NAME}'" \
-    --format='value(mcpServerId)' 2>/dev/null | head -1)
-
-if [ -z "${AGENT_URN}" ] || [ -z "${MCP_URN}" ]; then
-    echo "  ⚠ Could not resolve URNs (agent=${AGENT_URN:-?}, mcp=${MCP_URN:-?}). Skipping binding."
-else
-    BINDING_NAME="${BINDING_NAME:-${AGENT_DISPLAY_NAME}-binding}"
-    echo "  Source (agent): ${AGENT_URN}"
-    echo "  Target (MCP):   ${MCP_URN}"
-    echo "  Auth provider:  ${AUTH_PROVIDER_FULL_NAME}"
-    echo "  Continue URI:   ${CONTINUE_URI}"
-
-    if gcloud alpha agent-registry bindings describe "${BINDING_NAME}" \
-            --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
-        echo "  Binding exists — updating…"
-        gcloud alpha agent-registry bindings update "${BINDING_NAME}" \
-            --location="${REGION}" --project="${PROJECT_ID}" \
-            --auth-provider-binding="${AUTH_PROVIDER_FULL_NAME}" \
-            --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
-            --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
-            --quiet 2>&1 | tail -3
-    else
-        gcloud alpha agent-registry bindings create "${BINDING_NAME}" \
-            --location="${REGION}" --project="${PROJECT_ID}" \
-            --source-identifier="${AGENT_URN}" \
-            --target-identifier="${MCP_URN}" \
-            --auth-provider-binding="${AUTH_PROVIDER_FULL_NAME}" \
-            --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
-            --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
-            --quiet 2>&1 | tail -3
+# Resolve URNs (these only exist after the agent and MCP are mirrored into
+# the Registry — both have propagation delay independent of the underlying
+# Reasoning Engine / MCP service being ready). Earlier versions of this script
+# resolved the URNs with a single list call and SILENTLY skipped the binding
+# if either was empty — producing a fully-deployed agent that has no
+# (agent ⇄ MCP ⇄ auth_provider) triple. At runtime ADK then falls back to
+# no-auth, the consent popup never fires, the MCP rejects with 401, and the
+# stream comes back empty. Hard-failing here is correct: a deploy without
+# the binding is broken end-to-end.
+AGENT_URN=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    AGENT_URN=$(gcloud alpha agent-registry agents list \
+        --location="${REGION}" --project="${PROJECT_ID}" \
+        --filter="agentId:'reasoningEngines:${AGENT_ENGINE_ID}'" \
+        --format='value(agentId)' 2>/dev/null | head -1)
+    if [ -n "${AGENT_URN}" ]; then
+        break
     fi
-    echo "    ✓ Binding ${BINDING_NAME} applied"
-
-    # Also grant `roles/iamconnectors.user` on the CONNECTOR resource to the
-    # agent's INDIVIDUAL principal (not just the principalSet). The Console
-    # Identity tab for the agent shows Auth Providers based on per-principal
-    # IAM on the connector — without this, the binding shows up but the
-    # Auth Provider column is blank.
-    INDIVIDUAL_PRINCIPAL="principal://agents.global.org-${ORG_ID_LOCAL}.system.id.goog/resources/aiplatform/projects/${PROJECT_NUMBER}/locations/${REGION}/reasoningEngines/${AGENT_ENGINE_ID}"
-    ACCESS_TOKEN=$(gcloud auth print-access-token)
-    CURRENT_USER="user:$(gcloud config get-value account 2>/dev/null)"
-    curl -s -X POST \
-        "https://iamconnectors.googleapis.com/v1alpha/${AUTH_PROVIDER_FULL_NAME}:setIamPolicy" \
-        -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-        -H "x-goog-user-project: ${PROJECT_ID}" \
-        -H "Content-Type: application/json" \
-        -d "{\"policy\":{\"bindings\":[{\"role\":\"roles/iamconnectors.user\",\"members\":[\"${PRINCIPAL_SET}\",\"${INDIVIDUAL_PRINCIPAL}\",\"${CURRENT_USER}\"]}]}}" \
-        > /dev/null && echo "    ✓ Connector IAM updated (binding + individual principal visible in Console)"
+    echo "    Waiting for agents/ to mirror reasoningEngines/${AGENT_ENGINE_ID} (attempt ${i}/10)…"
+    sleep 5
+done
+if [ -z "${AGENT_URN}" ]; then
+    echo "  ✗ FATAL: agent ${AGENT_ENGINE_ID} did not appear in Agent Registry after 50s."
+    echo "    Without an agentId we cannot create the Binding — at runtime the consent"
+    echo "    popup would never fire and tool calls would 401 silently. Aborting."
+    exit 1
 fi
+
+MCP_URN=""
+for i in 1 2 3 4 5 6 7 8 9 10; do
+    MCP_URN=$(gcloud alpha agent-registry mcp-servers list \
+        --location="${REGION}" --project="${PROJECT_ID}" \
+        --filter="displayName='${MCP_REGISTRY_DISPLAY_NAME}'" \
+        --format='value(mcpServerId)' 2>/dev/null | head -1)
+    if [ -n "${MCP_URN}" ]; then
+        break
+    fi
+    echo "    Waiting for mcpServerId for '${MCP_REGISTRY_DISPLAY_NAME}' (attempt ${i}/10)…"
+    sleep 5
+done
+if [ -z "${MCP_URN}" ]; then
+    echo "  ✗ FATAL: MCP server '${MCP_REGISTRY_DISPLAY_NAME}' has no mcpServerId after 50s. Aborting."
+    exit 1
+fi
+
+BINDING_NAME="${BINDING_NAME:-${AGENT_DISPLAY_NAME}-binding}"
+echo "  Source (agent): ${AGENT_URN}"
+echo "  Target (MCP):   ${MCP_URN}"
+echo "  Auth provider:  ${AUTH_PROVIDER_FULL_NAME}"
+echo "  Continue URI:   ${CONTINUE_URI}"
+
+if gcloud alpha agent-registry bindings describe "${BINDING_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
+    echo "  Binding exists — updating mutable fields only…"
+    # `auth_provider_binding.auth_provider` is IMMUTABLE on a binding (the API
+    # rejects with "Cannot update the 'auth_provider_binding.auth_provider' of
+    # a binding."). Only continue_uri and scopes can be mutated. If you need
+    # to change the auth_provider, delete and recreate the binding.
+    gcloud alpha agent-registry bindings update "${BINDING_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" \
+        --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
+        --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
+        --quiet 2>&1 | tail -3
+else
+    gcloud alpha agent-registry bindings create "${BINDING_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" \
+        --source-identifier="${AGENT_URN}" \
+        --target-identifier="${MCP_URN}" \
+        --auth-provider-binding="${AUTH_PROVIDER_FULL_NAME}" \
+        --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
+        --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
+        --quiet 2>&1 | tail -3
+fi
+
+# Verify the binding actually landed in the Registry. `bindings create/update`
+# can return success while the resource itself is still creating (or the
+# upstream call swallowed an error). Without this check, the script would
+# claim success and we'd hit the same silent-skip failure mode.
+if ! gcloud alpha agent-registry bindings describe "${BINDING_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
+    echo "  ✗ FATAL: binding ${BINDING_NAME} not visible after create/update. Aborting."
+    exit 1
+fi
+echo "    ✓ Binding ${BINDING_NAME} applied AND verified in Registry"
+
+# Also grant `roles/iamconnectors.user` on the CONNECTOR resource to the
+# agent's INDIVIDUAL principal (not just the principalSet). The Console
+# Identity tab for the agent shows Auth Providers based on per-principal
+# IAM on the connector — without this, the binding shows up but the
+# Auth Provider column is blank.
+INDIVIDUAL_PRINCIPAL="principal://agents.global.org-${ORG_ID_LOCAL}.system.id.goog/resources/aiplatform/projects/${PROJECT_NUMBER}/locations/${REGION}/reasoningEngines/${AGENT_ENGINE_ID}"
+ACCESS_TOKEN=$(gcloud auth print-access-token)
+CURRENT_USER="user:$(gcloud config get-value account 2>/dev/null)"
+curl -s -X POST \
+    "https://iamconnectors.googleapis.com/v1alpha/${AUTH_PROVIDER_FULL_NAME}:setIamPolicy" \
+    -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+    -H "x-goog-user-project: ${PROJECT_ID}" \
+    -H "Content-Type: application/json" \
+    -d "{\"policy\":{\"bindings\":[{\"role\":\"roles/iamconnectors.user\",\"members\":[\"${PRINCIPAL_SET}\",\"${INDIVIDUAL_PRINCIPAL}\",\"${CURRENT_USER}\"]}]}}" \
+    > /dev/null && echo "    ✓ Connector IAM updated (binding + individual principal visible in Console)"
 
 # ─── Step 11: Redeploy frontend with AGENT_ENGINE_ID ────────────────────────
 echo ""

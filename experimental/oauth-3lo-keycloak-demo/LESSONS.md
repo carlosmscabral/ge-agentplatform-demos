@@ -203,6 +203,69 @@ Tentamos 3 estratégias diferentes de bloquear pyOpenSSL (null sys.modules, stub
 
 ---
 
+## Quarta rodada (resiliência do deploy e dilema final pyOpenSSL/mTLS)
+
+44. ❌ `deploy.sh` Step 10 listava `agents` por filter pra resolver `AGENT_URN`, e se o registry ainda não tinha mirrorado o agent (race de propagação), entrava num branch `else` com warning silencioso e **pulava a criação do Binding**. Deploy "succeeded" mas o agente subia sem `(agent, MCP, auth_provider)` registrado → runtime não emitia `adk_request_credential` → popup nunca disparava. Reproduzido limpo: undeploy + deploy → sem binding → falha exatamente nesse modo
+45. ✅ Fix: retry loop 10×5s para AGENT_URN e MCP_URN (espelha o pattern do Step 5), `exit 1` ao invés de warning silencioso, e `bindings describe` pós-create como sanity check
+46. ❌ `gcloud alpha agent-registry services update` NÃO passa `--display-name` por default — então o `displayName` no mirror em `mcp-servers/` mantém o valor antigo se um deploy anterior usou outro valor. Resultado: `mcp-servers list --filter="displayName=oauth-3lo-mcp"` retorna vazio (porque o mirror tinha `displayName: identity` de uma sessão antiga) → Step 5 falhava com "Could not resolve MCP registry name after 50s"
+47. ✅ Fix: `services update` agora passa `--display-name=${MCP_REGISTRY_DISPLAY_NAME}` explicitamente. `undeploy.sh` também passou a procurar o service pelo NOME (`services describe oauth-3lo-mcp`) em vez de filter por displayName, evitando órfãos que driftaram
+48. ❌ `bindings update` rejeitando `--auth-provider-binding`: API retorna `Cannot update the 'auth_provider_binding.auth_provider' of a binding` — esse campo é imutável após criação. Causa o segundo deploy a abortar Step 10 antes do IAM update e do Step 11 (frontend redeploy)
+49. ✅ Fix: `bindings update` só envia campos mutáveis (`continue_uri`, `scopes`). Para trocar o auth_provider, delete+recreate manual
+50. ❌ `gcloud run deploy --source=./frontend` SEM `--set-env-vars` nem `--update-env-vars` **RESETA as variáveis de ambiente** do serviço — quebrou o frontend (`AGENT_ENGINE_ID` virou empty) depois de rebuild de iteração. Cosmético (fácil de notar e restaurar) mas trap
+51. ❌ user_id randomizado por aba do browser (`'user-' + Math.random()`) causa um false-positive de "user mismatch": finalize escreve a credencial no vault como `user-XYZ`, /resume chama o agente como `user-XYZ`, agente busca no vault como `user-XYZ` → deveria casar. Mas em alguns casos (provavelmente propagação) `get_auth_credential` retorna como se consent ainda fosse requerido (`_is_consent_completed(context) == True` mas `metadata.uri_consent_required is not None` → `RuntimeError("Failed to retrieve consent based credential.")` na linha 275 do `gcp_auth_provider.py`)
+52. ⚠️ Mitigação parcial: frontend usa `userId = 'demo-user'` fixo, simulando "single signed-in user". Elimina a variável user_id como suspeito e reusa entrada quente no vault. Resolve o sintoma da linha 275; NÃO resolve o item 53 abaixo
+53. ❌ **DILEMA SEM SOLUÇÃO CODE-LEVEL**: após ~5min de idle do Reasoning Engine, `_retrieve_credentials` falha determinísticamente na chamada HTTPS pra `iamconnectorcredentials.googleapis.com` com `ValueError: Context has already been used to create a Connection, it cannot be mutated again` em `urllib3/contrib/pyopenssl.py:452`. ADK swallow → `RuntimeError("Failed to retrieve credential for user X on connector Y")` (linha 243, não a 275) → stream vazio → popup nunca dispara. Tentamos 4 abordagens DIFERENTES (todas falharam):
+    1. Manter telemetria OFF (já estava) — não basta; iamconnectorcredentials sozinho dispara a race
+    2. `sys.modules["urllib3.contrib.pyopenssl"] = None` antes de qualquer import — `ModuleNotFoundError` em google-auth's mtls path
+    3. `urllib3.contrib.pyopenssl.extract_from_urllib3() + inject_into_urllib3 = lambda: None` — quebra mTLS: `AttributeError: 'SSLContext' object has no attribute '_ctx'` em `google/auth/transport/requests.py:223` (o `_MutualTlsAdapter` do google-auth lê `ctx_poolmanager._ctx.use_certificate(x509)` — assume PyOpenSSLContext que tem `_ctx`; stdlib `ssl.SSLContext` não tem)
+    4. Stub no `sys.modules["urllib3.contrib.pyopenssl"]` com `inject_into_urllib3 = lambda: None` mas mantendo o módulo importável — mesmo `_ctx` AttributeError
+54. ✅ Reverter: voltar pro estado em que pyOpenSSL fica injetado normalmente. Demo funciona janela de ~5min pós-deploy, depois quebra deterministicamente até próximo redeploy. Sem keep-warm externo, é o melhor que conseguimos chegar code-level
+
+---
+
+## Conclusões da rodada 4
+
+### O problema raiz é acoplamento profundo google-auth → pyOpenSSL
+
+`google/auth/transport/requests.py:223` no `_MutualTlsAdapter.__init__` faz:
+
+```python
+ctx_poolmanager._ctx.use_certificate(x509)
+```
+
+— ou seja, lê o `_ctx` interno da `PoolManager` da urllib3 assumindo que é uma `PyOpenSSLContext`. Esse atributo `_ctx` é **específico do pyOpenSSL injetado**. Stdlib `ssl.SSLContext` não tem `_ctx`. Então:
+
+- **Com pyOpenSSL injetado**: mTLS funciona, MAS `PyOpenSSLContext` não é thread-safe → race condition `Context has already been used` em concorrência
+- **Sem pyOpenSSL injetado (qualquer estratégia)**: mTLS quebra na inicialização do `iamconnectorcredentials` Client
+
+Toda chamada do agente pro `iamconnectorcredentials` precisa mTLS (configurado automaticamente pelo client gRPC/REST gerado). Não dá pra escapar. Logo, **não dá pra escapar do pyOpenSSL injetado**.
+
+A solução real precisa vir upstream — ou em `google-auth` (remover o reach into `_ctx`, usar API agnóstica), ou em `urllib3.contrib.pyopenssl` (sincronizar o `Context.set_verify`).
+
+### Por que o "5min pós-deploy" funciona
+
+Reasoning Engine recém-instanciado: connection pool zerada, SSL contexts frescos, nenhum context ainda foi reusado pra criar Connection. Primeiras N requests passam limpas. Depois de uso, contexts viram "dirty" — qualquer mutação subsequente (incluindo `verify_mode` setter da urllib3, que dispara em todo `_validate_conn`) crasha.
+
+Cloud Run idle CPU throttling probabilísticamente piora — contexts ficam vivos no pool por mais tempo, mais chance de serem reusados num estado dirty.
+
+### Mitigações operacionais que NÃO implementamos aqui
+
+- **Cloud Scheduler keep-warm**: chamar `/chat` (com prompt no-op) a cada 3-4min mantém o pool quente, NÃO resolve a degradação a longo prazo (eventualmente quebra mesmo sob uso ativo, só atrasa)
+- **Auto-restart por hora**: redeployar o Reasoning Engine periodicamente. Brusco — sessões em andamento morrem
+- **Subclassar `GcpAuthProvider`** com `_retrieve_credentials` que cata `ValueError` e força nova HTTPSConnection: hacky, pode não resolver porque o pool não está sob nosso controle direto
+
+Decisão pra esta demo: aceitar a limitação, documentar, manter em `experimental/`.
+
+### O que esta rodada confirmou (negativos importantes)
+
+- **NÃO é problema de user_id**. Mesmo com `demo-user` fixo, race aparece pós-idle
+- **NÃO é problema de binding**. Binding existe e está correto durante a falha
+- **NÃO é problema de cache de browser**. Reproduz com curl direto pro frontend
+- **NÃO é problema de cookies/Keycloak**. Cookies chegam, finalize succeed, agent recebe consent — race está depois disso, no path interno do ADK pro vault
+- **É problema do pyOpenSSL race no path agent → iamconnectorcredentials**, confirmado por stack trace completo capturado em prod
+
+---
+
 ## Coisas que dariam pra melhorar (não feitas neste demo)
 
 - **`_LazyToolset`** como no `mcp-discovery-demo` — defere construção do toolset até primeiro uso, evitando que healthcheck do Agent Runtime dependa do Registry estar acessível em import time
