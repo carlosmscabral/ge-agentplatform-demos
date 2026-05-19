@@ -14,6 +14,7 @@ Each demo is fully parameterized — clone, set your GCP project, and deploy.
 | [`spiffe-registry-demo/`](spiffe-registry-demo/) | SPIFFE identity + Agent Registry discovery | SPIFFE `--agent-identity`, auto-registration, `AgentRegistry.get_remote_a2a_agent()`, dynamic discovery |
 | [`mcp-discovery-demo/`](mcp-discovery-demo/) | Financial Analyst Toolkit — fully dynamic MCP discovery + invocation | 3 FastMCP servers on Cloud Run (JSON-RPC), Agent Registry as source of truth, SPIFFE orchestrator with ONLY 3 tools (discover by intent/category + `invoke_mcp_tool` router), zero pre-loaded toolsets — new MCPs become reachable without redeploy |
 | [`code-execution-demo/`](code-execution-demo/) | Data Analyst with Agent Engine sandbox code execution | `AgentEngineSandboxCodeExecutor` + SPIFFE identity, pre-created sandbox-host Reasoning Engine, stateful sandbox per session (variables persist across turns), ~40 data science libs (pandas/numpy/matplotlib/sklearn/...), no network/no-pip-install/resource-limited, full audit trail in Cloud Trace |
+| [`oauth-3lo-keycloak-demo/`](oauth-3lo-keycloak-demo/) | Agent Identity 3-Legged OAuth with Keycloak-protected MCP | SPIFFE agent + Keycloak (any OIDC IdP works), `gcloud alpha agent-identity connectors`, Agent Registry Binding (agent→MCP→auth_provider), FastMCP with PyJWT/JWKS middleware, frontend with `adk_request_credential` consent popup + `/validateUserId` finalize, Google-managed token vault — agent code never sees the raw user token |
 
 > Experimental demos and references are in [`experimental/`](experimental/) — see its README for details.
 
@@ -65,6 +66,8 @@ ge-agentplatform-demos/
 ├── mcp-discovery-demo/           Dynamic MCP discovery (3 FastMCP servers on Cloud Run + SPIFFE orchestrator)
 │
 ├── code-execution-demo/          Data Analyst with Agent Engine sandbox code execution (SPIFFE + stateful sandbox)
+│
+├── oauth-3lo-keycloak-demo/      Agent Identity 3LO with Keycloak-protected MCP (SPIFFE + Registry Binding + JWT)
 │
 ├── evals-demo/                   Online evaluation demo
 │   ├── .env.template
