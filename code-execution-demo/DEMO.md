@@ -11,52 +11,65 @@ export ORCH_URL="https://us-central1-aiplatform.googleapis.com/v1beta1/projects/
 cd analyst-agent
 ```
 
-## ⚠️ Pre-flight check — sandbox TTL
+## ✅ Pre-flight check
 
-O sandbox compartilhado é criado com TTL configurável (`SANDBOX_TTL`,
-default **24h** — veja `.env.template`). Após expirar, o agente quebra
-com 404 ao tentar executar código.
-
-**Antes de cada demo, faça este check** (5 segundos):
+Com a versão atual (Gemini API code execution), **não há sandbox
+provisionado por nós** — Gemini API cuida do lifecycle. O único check
+necessário é que o agente esteja UP:
 
 ```bash
-# 1. Carregue o estado salvo pelo último deploy
-source .deploy-state    # define SANDBOX_RESOURCE, SANDBOX_HOST_RESOURCE, etc.
-
-# 2. Verifique se o sandbox ainda está vivo + quanto tempo resta
-cd analyst-agent
-uv run python - <<EOF
-from datetime import datetime, timezone
-import vertexai
-c = vertexai.Client(project="<PROJECT_ID>", location="us-central1",
-                    http_options={"api_version": "v1beta1"})
-try:
-    sb = c.agent_engines.sandboxes.get(name="${SANDBOX_RESOURCE}")
-    remaining = sb.expire_time - datetime.now(timezone.utc)
-    print(f"state:   {sb.state}")
-    print(f"expire:  {sb.expire_time}")
-    print(f"remain:  {remaining}")
-    if remaining.total_seconds() < 900:  # < 15 min
-        print("⚠️  POUCO TEMPO — re-deploy antes da demo")
-except Exception as e:
-    print(f"❌ NÃO ENCONTRADO ({e.__class__.__name__}) — re-deploy obrigatório")
-EOF
+ORCH_URL="<URL impressa pelo deploy.sh>"
+agents-cli run --url "${ORCH_URL}" --mode adk "Olá! Responda com 'OK'."
 ```
 
-**Se o sandbox estiver morto ou com pouco tempo**, simplesmente rode
-`./deploy.sh` de novo. É idempotente:
+Se responder, está pronto. Cold start típico do Agent Runtime: 5-15s na
+primeira chamada após período idle.
 
-- **Step 5** detecta sandbox ausente/expirado → cria um novo (TTL renovado)
-- **Step 6** redeploya o agente injetando o novo `SANDBOX_RESOURCE_NAME`
-- Tempo total: ~5-10 min (sandbox-host é reusado, só o orquestrador é
-  atualizado)
+> 📌 **Para demos importantes**: faça uma chamada warm-up 5 min antes
+> para evitar cold start no momento da apresentação.
 
-> 📌 **Para demos importantes**: rode `./deploy.sh` **15 min antes** da
-> apresentação. Isso garante TTL fresca + warm-up do orquestrador.
+## FAQ — perguntas comuns durante a demo
 
-> 🔁 **Para uso recorrente em produção**: configure `SANDBOX_TTL=604800s`
-> (7 dias) ou rode `./deploy.sh` via Cloud Scheduler periodicamente.
-> Documentado em `LESSONS.md §11`.
+### "Esta demo usa Agent Engine Code Execution Sandbox?"
+
+**Não — usa Gemini API Code Execution**, que é um produto distinto.
+
+Tentamos primeiro o `AgentEngineSandboxCodeExecutor` (= Agent Engine
+sandbox, recurso `sandboxEnvironments/...` visível na console) mas
+Gemini 2.5+ bypassa esse caminho. Pivotamos para `BuiltInCodeExecutor`
+(= Gemini API code execution, sandbox transparente da Gemini API).
+Detalhes em [`LESSONS.md` §0 e §12](./LESSONS.md).
+
+### "Vejo um Reasoning Engine `code-analyst-sandbox-host` na console — o que é?"
+
+Resíduo de uma iteração anterior (Agent Engine sandbox). Se ainda
+aparecer, foi cleanup incompleto. A versão atual do `deploy.sh` **não
+cria** mais esse recurso. Para deletar manualmente:
+
+```bash
+curl -s -X DELETE \
+  "https://us-central1-aiplatform.googleapis.com/v1beta1/projects/<NUM>/locations/us-central1/reasoningEngines/<ID>?force=true" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)"
+```
+
+### "O agente pediu pra gerar 10000 linhas de CSV e parou de responder. O que aconteceu?"
+
+Provavelmente o modelo entrou em loop com a code execution NATIVA do
+Gemini (não o nosso sandbox) ao tentar embutir o CSV inteiro na resposta,
+estourando token limits. Sintomas:
+
+- Texto inicial "Vou gerar..." aparece, depois nada
+- `update_time` do nosso sandbox não muda (sandbox externo bypassed)
+- AFC max=10 → modelo pode hit limit em iterações internas
+
+**Mitigação aplicada no agent.py**: system instruction explícita pede:
+- Use markdown ` ```python ``` ` blocks (não API-native code execution)
+- Para datasets > 1000 linhas, salve em `/tmp/<nome>.csv` e mostre só `head()`
+  + `shape` + caminho — NÃO o CSV inteiro
+- Limite I/O é 100MB/request, mas tokens de output são muito menores
+
+Se o problema persistir: prefira prompts que peçam **resumos** ao invés de
+dumps completos (ex: "salve em arquivo e me mostre só as 5 primeiras linhas").
 
 ## Access methods
 

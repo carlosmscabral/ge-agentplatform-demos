@@ -1,22 +1,34 @@
-# code-execution-demo — Data Analyst com Agent Engine Sandbox
+# code-execution-demo — Data Analyst com Gemini API Code Execution
 
 Um agente ADK em Python deployado no Agent Runtime com identidade SPIFFE
-que **gera e executa código Python sob demanda** num **sandbox isolado
-gerenciado pelo Agent Engine** (`AgentEngineSandboxCodeExecutor`).
+que **gera e executa código Python sob demanda** num sandbox isolado
+**gerenciado pela Gemini API** (`BuiltInCodeExecutor` →
+`Tool(code_execution=ToolCodeExecution())`).
 
 **Caso de uso (mockado)**: data analyst que cria datasets sintéticos,
-calcula estatísticas e gera gráficos via código Python — mantendo estado
-(variáveis, DataFrames) entre turnos da conversa, no mesmo sandbox.
+calcula estatísticas e gera gráficos via código Python no sandbox.
+
+> ⚠️ **Disambiguação importante**: existem **dois produtos GCP** com
+> nomes parecidos. Esta demo usa o primeiro:
+> - **Gemini API Code Execution** (✅ usado aqui) — sandbox transparente
+>   gerenciado pela Gemini API.
+>   [doc](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/code-execution)
+> - **Agent Engine Code Execution Sandbox** (alternativa para o futuro) —
+>   sandbox visível como recurso `sandboxEnvironments/...`, com TTL e
+>   listagem. [doc](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/code-execution-overview)
+>
+> Tentamos primeiro o segundo (`AgentEngineSandboxCodeExecutor`) mas
+> Gemini 2.5+ ignora e usa o nativo — vide [`LESSONS.md` §12](./LESSONS.md).
 
 ## O que isso demonstra
 
 | Capability | Como |
 |---|---|
-| Code execution dinâmica + segura | `AgentEngineSandboxCodeExecutor` — sandbox sem rede, sem instalação de pacotes |
-| Estado por sessão | Variáveis Python (ex: `df`) sobrevivem entre turnos do mesmo `session_id` |
+| Code execution dinâmica + segura | `BuiltInCodeExecutor` — sandbox gVisor sem rede, sem instalação de pacotes |
+| Estado dentro do AFC loop | Variáveis Python persistem entre execuções no mesmo turn |
 | Bibliotecas de data science | pandas, numpy, matplotlib, scipy, sklearn, plotly, statsmodels, sympy (~40 libs) |
 | SPIFFE identity para o agente | `agents-cli deploy --agent-identity` + grants em `principalSet` |
-| Audit trail | Cada bloco de código + stdout/stderr fica em span do Cloud Trace |
+| Audit trail | Cada `executable_code` + `code_execution_result` fica em span do Cloud Trace |
 
 ## Quick start
 

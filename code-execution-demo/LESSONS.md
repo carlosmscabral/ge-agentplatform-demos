@@ -6,7 +6,38 @@ atual, veja [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ---
 
-## 1. Escolha do executor — por que `AgentEngineSandboxCodeExecutor`
+## 0. Resumo executivo: a história em uma frase
+
+**Saímos** para construir um demo de **Agent Engine Code Execution Sandbox**
+(produto `agent_engines.sandboxes`, doc
+[scale/sandbox/code-execution-overview](https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/sandbox/code-execution-overview))
+via `AgentEngineSandboxCodeExecutor` do ADK. Após investigação extensa
+(§§1-11), descobrimos que **Gemini 2.5+ bypassa esse caminho** usando
+sua code execution nativa (§12). **Pivotamos** para
+`BuiltInCodeExecutor` (= **Gemini API Code Execution**, doc
+[vertex-ai/.../multimodal/code-execution](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/code-execution)),
+que é um produto **distinto** mas funcionalmente similar (mesmo gVisor,
+mesmas restrições de rede/pacotes), só com lifecycle 100% gerenciado
+pela Gemini API em vez do Agent Engine resources API.
+
+Trade-off aceito:
+- ✅ Funciona ponta-a-ponta com Gemini 2.5+
+- ✅ Mesma postura de segurança (sandbox isolado, sem rede, sem install)
+- ❌ Perdemos controle de TTL/listagem (era um pilar da demo original)
+- ❌ Nome da demo (`code-execution-demo`) ficou ambíguo
+
+**Trabalho futuro** (não bloqueia esta demo): para realmente usar
+`AgentEngineSandboxCodeExecutor` end-to-end, seria necessário um
+`before_model_callback` no Agent que strip os parts
+`executable_code`/`code_execution_result` da response do Gemini antes
+que ADK's `_run_post_processor` veja, forçando ADK a achar que código
+"ainda não foi executado" → roteia para nosso executor. Estimativa:
+~50 linhas de código numa subclass + risk de fragilidade contra
+updates da ADK. Documentado para futuro investigação.
+
+---
+
+## 1. Escolha original do executor — `AgentEngineSandboxCodeExecutor`
 
 Avaliamos 4 opções via leitura direta do ADK
 (`analyst-agent/.venv/lib/python3.12/site-packages/google/adk/code_executors/`):
@@ -226,6 +257,73 @@ arr[:] = 1.0   # força allocation de páginas físicas
 ```
 
 Ou use `np.random.randn(N)` que aloca + escreve.
+
+## 12. Gemini 3 Flash bypassa nosso sandbox via code execution NATIVA
+
+**Sintoma observado em produção**: o usuário pediu na Playground "gere
+dados sintéticos de IoT de vento em fazendas, ≥10000 linhas em CSV, use
+seu sandbox" — o agente respondeu com texto inicial mas **nunca entregou
+o CSV**, parando silenciosamente.
+
+**Investigação**:
+- `update_time` do nosso `code-analyst-shared-sandbox` ficou congelado
+  (15:02:31 antes E depois dos repros) — nosso `AgentEngineSandboxCodeExecutor`
+  **nunca foi chamado**
+- Mas Gemini "lembrava" do `df_wind`: respondeu "10000 linhas, 7 colunas"
+  quando perguntado — código foi executado em algum lugar
+
+**Root cause** (lendo
+`google/adk/flows/llm_flows/_code_execution.py` linha 332-337):
+
+```python
+code_str = CodeExecutionUtils.extract_code_and_truncate_content(
+    response_content, code_executor.code_block_delimiters
+)
+if not code_str:
+    return  # ← sai sem chamar nosso execute_code
+```
+
+E em `code_execution_utils.py:extract_code_and_truncate_content`:
+
+```python
+for idx, part in enumerate(content.parts):
+    if part.executable_code and (
+        idx == len(content.parts) - 1
+        or not content.parts[idx + 1].code_execution_result
+    ):
+        return part.executable_code.code
+```
+
+Quando Gemini 3 Flash emite numa única response **`executable_code` +
+`code_execution_result` JUNTOS** (execução nativa do Gemini, não
+roteada por nós), o `extract_code_and_truncate_content` vê que existe um
+`code_execution_result` logo após o `executable_code` e **assume "já foi
+executado, skip"** — nosso sandbox externo é bypassed.
+
+Para outputs grandes (10000 linhas), a execução nativa do Gemini pode:
+- Estourar token limit do response (~8k tokens default)
+- Entrar em AFC loop tentando refinar (max=10)
+- Retornar `finish_reason=MAX_TOKENS` sem texto wrapper final → agente
+  parece "parado" na UI
+
+**Mitigação aplicada (system instruction)**: agent.py agora tem uma
+"REGRA CRÍTICA" no `_INSTRUCTION` explicitamente pedindo:
+- Use blocos ` ```python ``` ` markdown (não API-native code execution)
+- Para datasets > 1000 linhas, salve em arquivo e mostre só `head()` +
+  `shape` + caminho — não o CSV inteiro
+
+Isto é uma mitigação **best-effort** — o modelo pode ignorar a system
+instruction e usar a nativa mesmo assim. Trabalho futuro:
+
+| Opção | Como | Custo |
+|---|---|---|
+| A. Subclassar Gemini model no ADK pra setar `tools=[]` (suprime native code) | Override do request building | ~30 linhas |
+| B. Pre-process `llm_request` em callback pra filtrar tools | ADK callback hook | ~10 linhas, mais elegante |
+| C. Usar `BuiltInCodeExecutor` deliberadamente (Gemini-native) e aceitar que perdemos controle do sandbox externo | Trocar 1 linha | Perde TTL, perde governance |
+| D. Forçar via `automatic_function_calling.disable=True` na config Gemini | Requer expor essa config no ADK Agent | Não exposto pelo ADK público hoje |
+
+Para esta demo, ficamos com A/B + system instruction; documentado no
+issue tracker como follow-up.
 
 ## 11. TTL eterno do sandbox (1 ano) — fix com pre-create
 
