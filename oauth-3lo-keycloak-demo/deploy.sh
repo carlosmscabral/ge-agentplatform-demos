@@ -293,11 +293,11 @@ agents-cli deploy \
     --project "${PROJECT_ID}" \
     --region "${REGION}" \
     --agent-identity \
-    --update-env-vars "GEMINI_MODEL=${GEMINI_MODEL},GOOGLE_CLOUD_LOCATION=global,GOOGLE_CLOUD_REGION=${REGION},REGISTRY_LOCATION=${REGION},DISABLE_GCP_TELEMETRY=true,GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=False,GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=False,CONTINUE_URI=${CONTINUE_URI},MCP_REGISTRY_NAME=${MCP_REGISTRY_NAME}" \
+    --update-env-vars "GEMINI_MODEL=${GEMINI_MODEL},GOOGLE_CLOUD_LOCATION=global,GOOGLE_CLOUD_REGION=${REGION},REGISTRY_LOCATION=${REGION},DISABLE_GCP_TELEMETRY=false,GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=True,GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES=False,CONTINUE_URI=${CONTINUE_URI},MCP_REGISTRY_NAME=${MCP_REGISTRY_NAME}" \
     --no-confirm-project
 
 AGENT_RESOURCE=$(python3 -c "import json; print(json.load(open('deployment_metadata.json'))['remote_agent_runtime_id'])")
-AGENT_ENGINE_ID=$(echo "${AGENT_RESOURCE}" | grep -oP 'reasoningEngines/\K[0-9]+')
+AGENT_ENGINE_ID=$(echo "${AGENT_RESOURCE}" | awk -F'/' '{print $NF}')
 AGENT_URL="https://${REGION}-aiplatform.googleapis.com/v1beta1/${AGENT_RESOURCE}"
 echo ""
 echo "  Agent deployed: ${AGENT_RESOURCE}"
@@ -400,26 +400,19 @@ echo "  Continue URI:   ${CONTINUE_URI}"
 
 if gcloud alpha agent-registry bindings describe "${BINDING_NAME}" \
         --location="${REGION}" --project="${PROJECT_ID}" --quiet >/dev/null 2>&1; then
-    echo "  Binding exists — updating mutable fields only…"
-    # `auth_provider_binding.auth_provider` is IMMUTABLE on a binding (the API
-    # rejects with "Cannot update the 'auth_provider_binding.auth_provider' of
-    # a binding."). Only continue_uri and scopes can be mutated. If you need
-    # to change the auth_provider, delete and recreate the binding.
-    gcloud alpha agent-registry bindings update "${BINDING_NAME}" \
-        --location="${REGION}" --project="${PROJECT_ID}" \
-        --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
-        --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
-        --quiet 2>&1 | tail -3
-else
-    gcloud alpha agent-registry bindings create "${BINDING_NAME}" \
-        --location="${REGION}" --project="${PROJECT_ID}" \
-        --source-identifier="${AGENT_URN}" \
-        --target-identifier="${MCP_URN}" \
-        --auth-provider-binding="${AUTH_PROVIDER_FULL_NAME}" \
-        --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
-        --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
-        --quiet 2>&1 | tail -3
+    echo "  Binding exists — deleting and recreating to update immutable fields…"
+    gcloud alpha agent-registry bindings delete "${BINDING_NAME}" \
+        --location="${REGION}" --project="${PROJECT_ID}" --quiet
 fi
+
+gcloud alpha agent-registry bindings create "${BINDING_NAME}" \
+    --location="${REGION}" --project="${PROJECT_ID}" \
+    --source-identifier="${AGENT_URN}" \
+    --target-identifier="${MCP_URN}" \
+    --auth-provider-binding="${AUTH_PROVIDER_FULL_NAME}" \
+    --auth-provider-binding-continue-uri="${CONTINUE_URI}" \
+    --auth-provider-binding-scopes="${ALLOWED_SCOPES}" \
+    --quiet 2>&1 | tail -3
 
 # Verify the binding actually landed in the Registry. `bindings create/update`
 # can return success while the resource itself is still creating (or the

@@ -521,8 +521,8 @@ principalSet://agents.global.org-<ORG_ID>.system.id.goog/
 | Env var | Valor na demo | Por quê |
 |---------|---------------|---------|
 | `GOOGLE_API_PREVENT_AGENT_TOKEN_SHARING_FOR_GCP_SERVICES` | `False` | Permite o token cert-bound do SPIFFE ser usado em chamadas a APIs do GCP control-plane (agentregistry, iamconnectorcredentials). Sem isso → 401 mesmo com IAM correto. Mesmo workaround do A2A no `spiffe-registry-demo` |
-| `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY` | `False` | Desliga o exportador OTEL do Agent Engine — evita HTTPS concorrente que dispara um race no pyOpenSSL (sob carga) |
-| `DISABLE_GCP_TELEMETRY` | `true` | Diz ao nosso `app/app_utils/telemetry.py` para fazer early-return e não configurar Cloud Trace/Logging exporters |
+| `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY` | `True` | Habilita o exportador OTEL do Agent Engine (Cloud Trace nativo) — totalmente seguro devido ao patch de mTLS |
+| `DISABLE_GCP_TELEMETRY` | `false` | Habilita a telemetria do Cloud Trace e estruturação de Cloud Logging na aplicação |
 
 ### Scopes OAuth no Keycloak
 
@@ -684,7 +684,9 @@ Se o refresh_token também expirou ou foi revogado, o connector retorna `uriCons
 ### Frontend (`frontend/app/main.py`)
 
 - **Stack**: FastAPI + Jinja2 + httpx, deployado em Cloud Run com Dockerfile simples (python:3.12-slim)
-- **Estado**: in-process (`_created_sessions` set, cookies no browser). Cloud Run pode reciclar instâncias — em caso de cold start, `create_session` simplesmente recria a sessão (idempotente)
+- **Estado**: in-process (`_created_sessions` set, cookies no browser). Cloud Run pode reciclar instâncias — em caso de cold start, `create_session` simplesmente recria a sessão (idempotente).
+- **Estratégia de Sessão e User ID (`localStorage`)**: Para garantir estabilidade e evitar condições de corrida de mTLS/replicação de credenciais no cofre do Google (que ocorrem ao rotacionar IDs agressivamente a cada requisição), o frontend armazena um ID de usuário semi-persistente no `localStorage` do navegador (`demo_user_id`). A sessão de chat (`session_id`) permanece per-tab (reiniciada ao reabrir a aba).
+- **Botão "Resetar Demo"**: Permite testar o fluxo de consentimento do zero limpando o ID do `localStorage`, gerando um novo ID dinâmico e forçando o recarregamento da página para re-disparar o popup do Keycloak instantaneamente.
 - **Cookies setados em `/chat`** (quando agente pede consent):
   - `user_id` — `SameSite=Lax; Secure; HttpOnly; Max-Age=600`
   - `consent_nonce` — mesmo flags
@@ -764,9 +766,9 @@ Se o refresh_token também expirou ou foi revogado, o connector retorna `uriCons
   toolset = _LazyMcpToolset(MCP_REGISTRY_NAME, auth_scheme, CONTINUE_URI)
   root_agent = Agent(..., tools=[toolset])
   ```
-- **Telemetria desabilitada** (`DISABLE_GCP_TELEMETRY=true` + `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=False`) — sem fonte concorrente de HTTPS, race do pyOpenSSL (dep transitiva de `google-auth[pyopenssl]`) raramente dispara
+- **Telemetria habilitada** (`DISABLE_GCP_TELEMETRY=false` + `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=True`) — totalmente funcional e segura, graças ao monkey-patch completo de thread-safety do `PyOpenSSLContext` injetado no início de `agent_runtime_app.py` que intercepta e silencia exceções concorrentes pós-conexão.
 - **Instruction sem nomes de tools** — schema do function_call é a única fonte de verdade pra Gemini. Listar nomes na instruction só atrapalha
-- **`agent_runtime_app.py`**: subclasses `AdkApp`. Configura `vertexai.init()`, telemetria (early-return se `DISABLE_GCP_TELEMETRY=true`), `GcsArtifactService` para sessions. Importa comentário documentando o block de pyOpenSSL caso telemetria seja reativada
+- **`agent_runtime_app.py`**: subclasses `AdkApp`. Configura `vertexai.init()`, inicializa o patch preemptivo de mTLS da urllib3, telemetria completa, e `GcsArtifactService` para sessions. Ativa o monkey-patch completo do `PyOpenSSLContext` para mitigar o bug de concorrência concorrente/idle do pyOpenSSL.
 - **Instrução do agente**: lista os nomes exatos das tools (`get_my_profile`, `echo`) com aviso para não alterar — previne hallucination do LLM quando retoma após consent
 
 ### Agent Identity Connector (`projects/.../connectors/oauth-3lo-keycloak`)

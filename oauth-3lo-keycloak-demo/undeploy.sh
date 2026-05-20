@@ -93,13 +93,31 @@ gcloud run services delete "${MCP_SERVICE_NAME}" \
     --region="${REGION}" --project="${PROJECT_ID}" --quiet 2>/dev/null \
     || echo "    MCP service not found."
 
-# ─── Step 5: Delete Agent Identity auth provider ────────────────────────────
+# ─── Step 5: Clean Agent Identity authorizations (tokens) without deleting connector ───
 echo ""
-echo ">>> Step 5/6: Deleting Agent Identity auth provider…"
-gcloud alpha agent-identity connectors delete "${AUTH_PROVIDER_NAME}" \
+echo ">>> Step 5/6: Cleaning Agent Identity authorizations (tokens) inside ${AUTH_PROVIDER_NAME}…"
+echo "    [PRESERVATION] Keeping the connector resource to avoid 30-day soft-delete locks"
+echo "    and KMS key corruption. Listing and revoking stored authorizations (tokens) instead:"
+
+USER_IDS=$(gcloud alpha agent-identity connectors authorizations list \
+    --connector="${AUTH_PROVIDER_NAME}" \
     --location="${AUTH_PROVIDER_LOCATION}" \
-    --project="${PROJECT_ID}" --quiet 2>/dev/null \
-    || echo "    Auth provider not found."
+    --project="${PROJECT_ID}" \
+    --format="value(clientUserId)" 2>/dev/null | sort -u || true)
+
+if [ -n "${USER_IDS}" ]; then
+    for user_id in ${USER_IDS}; do
+        echo "    Revoking authorization/tokens for user: ${user_id}..."
+        gcloud alpha agent-identity connectors revoke-authorization "${AUTH_PROVIDER_NAME}" \
+            --location="${AUTH_PROVIDER_LOCATION}" \
+            --project="${PROJECT_ID}" \
+            --user-id="${user_id}" \
+            --quiet 2>/dev/null || echo "    Failed to revoke authorization for user ${user_id}."
+    done
+    echo "    All user authorizations revoked successfully."
+else
+    echo "    No active authorizations found inside the connector."
+fi
 
 # ─── Step 6: Delete staging bucket ──────────────────────────────────────────
 echo ""

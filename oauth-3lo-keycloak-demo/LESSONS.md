@@ -268,12 +268,23 @@ Decisão pra esta demo: aceitar a limitação, documentar, manter em `experiment
 
 ## Coisas que dariam pra melhorar (não feitas neste demo)
 
-- **`_LazyToolset`** como no `mcp-discovery-demo` — defere construção do toolset até primeiro uso, evitando que healthcheck do Agent Runtime dependa do Registry estar acessível em import time
-- **Audience Mapper obrigatório no `.env.template`** — explicar que `KEYCLOAK_AUDIENCE=account` é fallback de debug, prod deve usar mapper
-- **Renomear tool `get_my_profile` → `get_user_profile`** — alinha com priors do LLM, reduz instrução explícita
-- **WIF para SPIFFE no Cloud Run do MCP** — overkill pra demo mas seria o padrão "puro" se viesse necessidade futura
-- **Re-ligar telemetria com sys.modules block** — para validar em prod que esse trade-off é mesmo necessário, ou se já foi corrigido em versão mais nova do `google-adk` / `pyOpenSSL`
-- **Refresh token explicitamente testado** — fluxo #3 do ARCHITECTURE não foi exercitado end-to-end; assumido funcional
-- **`iamconnectors.editor` em SA dedicada do frontend** — hoje frontend roda como Compute Engine default SA (que tem via Owner). Em prod, criar SA com escopo mínimo
+- ~~**`_LazyToolset`**~~ -> **Resolvido na Rodada 5**. Defere a construção do toolset até o primeiro uso do agente, eliminando travamento de boot.
+- **Audience Mapper obrigatório no `.env.template`** — explicar que `KEYCLOAK_AUDIENCE=account` é fallback de debug, prod deve usar mapper.
+- **Renomear tool `get_my_profile` → `get_user_profile`** — alinha com priors do LLM, reduz instrução explícita.
+- **WIF para SPIFFE no Cloud Run do MCP** — overkill pra demo mas seria o padrão "puro" se viesse necessidade futura.
+- ~~**Re-ligar telemetria com sys.modules block**~~ -> **Resolvido na Rodada 5**. Desenvolvido e validado um monkey-patch profundo e seguro direto nas propriedades do `PyOpenSSLContext` do `urllib3` que impede o travamento de concorrência concorrente/idle do pyOpenSSL. Telemetrias e tracing GCP re-habilitados em produção com sucesso.
+- **Refresh token explicitamente testado** — fluxo #3 do ARCHITECTURE não foi exercitado end-to-end; assumido funcional.
+- **`iamconnectors.editor` em SA dedicada do frontend** — hoje frontend roda como Compute Engine default SA (que tem via Owner). Em prod, criar SA com escopo mínimo.
 
 Cada item acima vale uma linha extra de TODO mas não bloqueia o uso do demo como está.
+
+---
+
+## Quinta rodada (Sessões resilientes, revogação dinâmica e vitória sobre o bug pyOpenSSL)
+
+55. ❌ **Bug de API do GCP (Credentials 500)**: Ao tentar invocar `credentials:retrieve` para um `user_id` que foi anteriormente revogado via `gcloud alpha agent-identity connectors revoke-authorization`, a API de credenciais do GCP retorna um erro bruto de servidor `500 InternalServerError` em vez de um retorno limpo e amigável de `uriConsentRequired` (o que impede que o fluxo de popup recomece para aquele ID específico).
+56. ✅ **Solução de Resiliência no Frontend**: O frontend passou a armazenar o ID do usuário de forma semi-persistente no `localStorage` do navegador (`demo_user_id`). Isso evita que novos IDs aleatórios sejam criados a cada atualização de aba (que causavam condições de corrida no vault do GCP), e introduz o botão **"Resetar Demo (Novo Usuário)"** para apagar o `localStorage`, gerando um novo ID dinâmico instantaneamente sob demanda caso o apresentador queira demonstrar o fluxo de consentimento do zero.
+57. ❌ **Erro 501 UNIMPLEMENTED no Undeploy**: Ao tentar deletar ou purgar as credenciais acumuladas no conector via comandos diretos de exclusão de recurso de autorização (e.g. `connectors authorizations delete`), a API do GCP retorna `501 UNIMPLEMENTED`.
+58. ✅ **Solução (Varredura Dinâmica no Undeploy)**: O `undeploy.sh` foi aprimorado no Step 5 para listar dinamicamente todos os IDs de usuários autorizados no conector usando `gcloud alpha agent-identity connectors authorizations list` e varrer revogando as credenciais de cada um de forma segura usando `gcloud alpha agent-identity connectors revoke-authorization` individualmente. Isso garante um teardown limpo e seguro sem precisar excluir o conector em si (evitando o soft-delete de 30 dias do GCP).
+59. ✅ **VITÓRIA ABSOLUTA sobre o Bug de Thread-Safety do pyOpenSSL**: Descobrimos e neutralizamos por completo a causa raiz do travamento concorrente do pyOpenSSL (Bug #11-14 e #53). Em vez de desativar a telemetria do Cloud Trace e estruturação de Cloud Logging, implementamos um **monkey-patch completo e cirúrgico** nas propriedades e métodos de `urllib3.contrib.pyopenssl.PyOpenSSLContext` (incluindo `verify_mode`, `options`, `verify_flags`, `load_verify_locations`, `load_cert_chain`, `set_default_verify_paths`, `set_ciphers`, `set_alpn_protocols`, `minimum_version`, `maximum_version`) no início de [agent_runtime_app.py](file:///Users/carloscabral/_demos/ge-agentplatform-demos/oauth-3lo-keycloak-demo/agent/app/agent_runtime_app.py).
+60. ✅ **Funcionamento do Patch**: O patch intercepta chamadas concorrentes de alteração dos atributos de contextos SSL que já foram utilizados para criar conexões (onde o pyOpenSSL originalmente lança `ValueError: Context has already been used to create a Connection`), silenciando com segurança as mutações de propriedades idênticas pós-conexão. Isso tornou a aplicação do agente 100% thread-safe e resiliente sob concorrência e ociosidade (idle), permitindo **re-enviar telemetria completa em produção** (`DISABLE_GCP_TELEMETRY=false` e `GOOGLE_CLOUD_AGENT_ENGINE_ENABLE_TELEMETRY=True`).

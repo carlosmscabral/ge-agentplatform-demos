@@ -27,6 +27,8 @@
     project=<code>{{ project_id }}</code>
     region=<code>{{ region }}</code>
     auth_provider=<code>{{ auth_provider_short }}</code>
+    user_id=<code id="user-id-display">...</code>
+    <button id="reset-user" style="padding: 3px 8px; font-size: 0.8rem; background: #dc2626; color: white; border-radius: 4px; margin-left: 10px; cursor: pointer; border: 0; font-weight: 600;">Resetar Demo (Novo Usuário)</button>
   </p>
 
   {% if not agent_configured %}
@@ -45,18 +47,29 @@
     const promptEl = document.getElementById('prompt');
     const sendBtn = document.getElementById('send');
 
-    // Session is per-tab; user is FIXED for the whole demo.
+    // Session is per-tab; user is semi-persistent via localStorage to avoid
+    // race conditions in the Agent Identity vault while allowing easy reset.
     //
-    // Why fixed user_id: this demo simulates a "single signed-in user" — a real
-    // app would derive user_id from its own login (cookie, JWT, IDP). Random
-    // per-tab user_ids made it easy to demonstrate isolation but caused the
-    // post-consent credential lookup in the Agent Identity vault to miss
-    // intermittently (a token finalized as user-XYZ does not appear queryable
-    // as user-XYZ on the very next agent call unless the vault has fully
-    // propagated). A stable user_id reuses an already-warm vault entry across
-    // tabs / browsers — closer to how a real app behaves and removes the race.
+    // Why semi-persistent user_id: a stable user_id reuses an already-warm vault
+    // entry across tabs/refreshes, eliminating intermittent replication lag/misses
+    // on subsequent agent queries right after consent. If we need a clean,
+    // un-consented demo, the "Resetar Demo" button forces a fresh UUID.
     const sessionId = 'sess-' + Math.random().toString(36).slice(2, 12);
-    const userId = 'demo-user';
+    
+    let userId = localStorage.getItem('demo_user_id');
+    if (!userId) {
+      userId = 'demo-user-' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('demo_user_id', userId);
+    }
+
+    document.getElementById('user-id-display').textContent = userId;
+
+    document.getElementById('reset-user').addEventListener('click', () => {
+      const newId = 'demo-user-' + Math.random().toString(36).slice(2, 10);
+      localStorage.setItem('demo_user_id', newId);
+      alert('Novo ID gerado: ' + newId + '. Recarregando página…');
+      window.location.reload();
+    });
 
     function append(kind, text) {
       const line = document.createElement('div');

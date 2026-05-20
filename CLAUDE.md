@@ -199,6 +199,7 @@ ge-agentplatform-demos/
 ├── skills-lock.json
 ├── sessions-memory-demo/         # Active demo: Sessions + Memory Bank
 ├── evals-demo/                   # Active demo: Online evaluation
+├── oauth-3lo-keycloak-demo/       # Active demo: Managed 3-Legged OAuth (Keycloak)
 └── experimental/                 # Non-conforming demos and references
     ├── README.md
     ├── _template/
