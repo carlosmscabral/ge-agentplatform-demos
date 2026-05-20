@@ -29,7 +29,7 @@ Este guia te leva pelo fluxo OAuth 3-Legged end-to-end. Dois caminhos intercambi
 
 ## Caminho A — Console Playground
 
-1. Abra o link do Console impresso pelo `deploy.sh`. Aponta pra página do Reasoning Engine em `console.cloud.google.com/vertex-ai/agents/agent-engines/...`
+1. Abra o link do Console impresso pelo `deploy.sh`. Aponta pra página do Reasoning Engine em `console.cloud.google.com/vertex-ai/agents/locations/$REGION/reasoning-engines/...`
 2. Vá na aba **Playground**
 3. Envie o prompt: **"Qual é o meu perfil no sistema?"**
 4. **Observe**: aparece o prompt de consent diretamente no Playground (Console implementa o handshake `adk_request_credential` nativamente). Clica para logar no Keycloak
@@ -45,18 +45,19 @@ Este guia te leva pelo fluxo OAuth 3-Legged end-to-end. Dois caminhos intercambi
 ## Caminho B — Frontend Cloud Run
 
 1. Abra o **URL canônico** do frontend (ex.: `https://oauth-3lo-frontend-yozowz6hla-uc.a.run.app`). Se você abrir o outro hostname (com project number), middleware redireciona automaticamente
-2. **Observe** o cabeçalho: project, region, auth provider name. Se aparecer "AGENT_ENGINE_ID is empty", o frontend ainda não tem o agent — espere o `deploy.sh` terminar o segundo redeploy e recarregue
-3. Digite: **"Qual é o meu perfil no sistema?"** e clique *Enviar*
-4. **Observe** o log de chat:
+2. **Observe** o cabeçalho: project, region, auth provider name, e o campo **`user_id`**. O ID de usuário é gerado na primeira carga e persistido via `localStorage` para manter a estabilidade da sessão. Se aparecer "AGENT_ENGINE_ID is empty", o frontend ainda não tem o agent — espere o `deploy.sh` terminar o segundo redeploy e recarregue.
+3. **Mesa Limpa (Opcional)**: Se quiser simular o fluxo de primeiro consentimento do zero no Keycloak, clique no botão vermelho **"Resetar Demo (Novo Usuário)"** no cabeçalho antes de começar. Isso gera um novo ID limpo no `localStorage` e recarrega a página.
+4. Digite: **"Qual é o meu perfil no sistema?"** e clique *Enviar*
+5. **Observe** o log de chat:
    - `user:` — seu prompt
    - `system: Consent required — opening Keycloak in a popup…`
    - Popup abre no `auth_uri` do Keycloak
-5. Faça login no Keycloak (e dê consent se for sua primeira vez)
-6. **Observe** o popup mostrando brevemente "Consent recorded ✔" e fechando automaticamente
-7. **Observe** o log de chat continuando:
+6. Faça login no Keycloak (e dê consent se for sua primeira vez)
+7. **Observe** o popup mostrando brevemente "Consent recorded ✔" e fechando automaticamente
+8. **Observe** o log de chat continuando:
    - `system: Consent recorded, resuming conversation…`
    - `agent:` — perfil em prosa PT-BR com os claims do MCP
-8. Abra DevTools (Network) e reenvie o prompt — **não** abre popup; connector serve o token do vault
+9. Abra DevTools (Network) e reenvie o prompt — **não** abre popup; o conector serve o token do vault diretamente de forma instantânea.
 
 ### Inspecionar o que rolou
 
